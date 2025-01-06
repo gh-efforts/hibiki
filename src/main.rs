@@ -38,7 +38,7 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
             s.spawn(|| {
                 let batch_size = input_list.len() as i32;
                 let ctx_params = LlamaContextParams::default()
-                    .with_n_ctx(NonZeroU32::new(batch_size as u32 * 512))
+                    .with_n_ctx(NonZeroU32::new(batch_size as u32 * 64))
                     .with_n_batch(512);
 
                 let mut session = model.new_context(&backend, ctx_params)?;
