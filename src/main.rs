@@ -30,8 +30,11 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
         .map(|prompt| (model.str_to_token(prompt, AddBos::Always).unwrap(), prompt))
         .collect::<Vec<_>>();
 
+    let threads = std::thread::available_parallelism()?;
+    let chunk_size = input_list.len() / threads;
+
     std::thread::scope(|s| {
-        for input_list in input_list.chunks(8) {
+        for input_list in input_list.chunks(chunk_size) {
             s.spawn(|| {
                 let batch_size = input_list.len() as i32;
                 let ctx_params = LlamaContextParams::default()
@@ -122,9 +125,9 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
 fn main() {
     let mut args = std::env::args();
     args.next();
-    let prompt_list = args.next().unwrap();
-
-    let prompt_list: Vec<String> = serde_json::from_str(&prompt_list).unwrap();
+    let prompt_list_path = args.next().unwrap();
+    let prompt_list = std::fs::read(prompt_list_path).unwrap();
+    let prompt_list: Vec<String> = serde_json::from_slice(&prompt_list).unwrap();
     let decode_count = Arc::new(AtomicU32::new(0));
 
     std::thread::spawn({
