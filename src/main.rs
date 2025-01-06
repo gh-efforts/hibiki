@@ -30,7 +30,7 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
         .map(|prompt| (model.str_to_token(prompt, AddBos::Always).unwrap(), prompt))
         .collect::<Vec<_>>();
 
-    let threads = 4;
+    let threads = 16;
     let chunk_size = input_list.len() / threads;
 
     std::thread::scope(|s| {
