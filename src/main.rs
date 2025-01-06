@@ -38,6 +38,7 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
             s.spawn(|| {
                 let batch_size = input_list.len() as i32;
                 let ctx_params = LlamaContextParams::default()
+                    .with_offload_kqv(true)
                     .with_n_ctx(NonZeroU32::new(batch_size as u32 * 64))
                     .with_n_batch(512);
 
