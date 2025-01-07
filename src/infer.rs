@@ -83,6 +83,8 @@ impl <'a> SequenceSlots<'a> {
         }
 
         let sequence_list = &mut self.sequence_list;
+        let mut kv_cache_shift = false;
+
         for (i, slot) in sequence_list.iter_mut().enumerate() {
             if let Some(seq) = slot {
                 let out_token = seq.sampler.sample(ctx, -1);
@@ -90,6 +92,7 @@ impl <'a> SequenceSlots<'a> {
                 macro_rules! remove_slot {
                     () => {
                         *slot = None;
+                        kv_cache_shift = true;
                         ctx.clear_kv_cache_seq(Some(i as u32), None, None)?;
                     };
                 }
@@ -113,6 +116,7 @@ impl <'a> SequenceSlots<'a> {
                 seq.kv_cache_count += 1;
 
                 if seq.kv_cache_count > seq.ctx_size {
+                    kv_cache_shift = true;
                     let past = seq.token_pos - 1;
                     ensure!(ctx.clear_kv_cache_seq(Some(i as u32), None, Some(past - seq.ctx_size / 2))?);
                     seq.kv_cache_count -= seq.ctx_size / 2;
@@ -120,7 +124,9 @@ impl <'a> SequenceSlots<'a> {
             }
         }
 
-        ctx.kv_cache_defrag();
+        if kv_cache_shift {
+            ctx.kv_cache_defrag();
+        }
         Ok(slot_size)
     }
 }
