@@ -16,7 +16,7 @@ use std::time::Duration;
 struct Sequence {
     input_tokens: Vec<LlamaToken>,
     sampler: LlamaSampler,
-    callback: tokio::sync::mpsc::UnboundedSender<LlamaToken>,
+    callback: flume::Sender<LlamaToken>,
     token_pos: u32,
     kv_cache_count: u32,
     maximum_tokens: u32,

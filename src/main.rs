@@ -22,7 +22,7 @@ mod api;
 mod infer;
 
 struct CompletionsTask {
-    callback: tokio::sync::mpsc::UnboundedSender<LlamaToken>,
+    callback: flume::Sender<LlamaToken>,
     input_token_list: Vec<LlamaToken>,
     sampler: LlamaSampler,
     maximum_tokens: u32

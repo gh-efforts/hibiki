@@ -14,7 +14,7 @@ use std::cmp::min;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use axum::http::StatusCode;
-use tokio_stream::StreamExt;
+use futures_util::StreamExt;
 
 struct Context {
     model: Arc<LlamaModel>,
@@ -27,7 +27,7 @@ struct Context {
 async fn completion_req_to_task(
     req: async_openai::types::CreateCompletionRequest,
     model: Arc<LlamaModel>,
-    callback: tokio::sync::mpsc::UnboundedSender<LlamaToken>,
+    callback: flume::Sender<LlamaToken>,
     maximum_tokens: u32
 ) -> Result<CompletionsTask> {
     tokio::task::spawn_blocking(move || {
@@ -83,7 +83,7 @@ async fn v1_completions(
     Json(req): Json<async_openai::types::CreateCompletionRequest>
 ) -> Response {
     let is_stream = req.stream.unwrap_or(false);
-    let (tx,mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let (tx, rx) = flume::unbounded();
     let completion_id = rand::random::<u64>().to_string();
 
     let fut = async {
@@ -93,7 +93,7 @@ async fn v1_completions(
         send_to_backend(task, &*ctx).await?;
 
         let resp = if is_stream {
-            let out_stream = tokio_stream::wrappers::UnboundedReceiverStream::new(rx)
+            let out_stream = rx.into_stream()
                 .map(move |token| {
                     let text = ctx.model.token_to_str(token, Special::Plaintext)?;
 
@@ -117,7 +117,7 @@ async fn v1_completions(
 
                     Result::<_, anyhow::Error>::Ok(event)
                 })
-                .chain(tokio_stream::once({
+                .chain(futures_util::stream::once(async {
                     let event = axum::response::sse::Event::default()
                         .data("[DONE]");
                     Ok(event)
@@ -125,7 +125,7 @@ async fn v1_completions(
             Sse::new(out_stream).into_response()
         } else {
             let mut out_tokens = Vec::new();
-            while let Some(token) = rx.recv().await {
+            while let Ok(token) = rx.recv_async().await {
                 out_tokens.push(token);
             }
 
