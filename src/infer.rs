@@ -104,7 +104,7 @@ impl <'a> SequenceSlots<'a> {
 
                 seq.callback.send(out_token)?;
 
-                if seq.token_pos + 1 >= seq.maximum_tokens - seq.input_tokens.len() as u32 {
+                if seq.token_pos + 1 >= seq.maximum_tokens + seq.input_tokens.len() as u32 {
                     remove_slot!();
                     continue;
                 }
