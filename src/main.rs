@@ -45,6 +45,9 @@ struct Args {
 
     #[arg(long, default_value_t = 1024)]
     maximum_tokens: u32,
+
+    #[arg(short, long)]
+    template: Option<String>
 }
 
 fn logger_init() -> Result<()> {
@@ -104,6 +107,7 @@ fn exec(args: Args) -> Result<()> {
             args.maximum_tokens,
             args.kv_cache_size_pre_task,
             tx,
+            args.template
         );
 
         tokio::try_join!(infer_handle, api_handle)?;
