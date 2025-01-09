@@ -53,12 +53,12 @@ async fn completion_req_to_task(
 
         let task = CompletionsTask {
             callback,
-            input_token_list: input_tokens,
-            sampler,
             maximum_tokens: min(
                 req.max_tokens.map(|n_tokens| n_tokens + input_tokens.len() as u32).unwrap_or(kv_cache_size_pre_task),
                 kv_cache_size_pre_task
-            )
+            ),
+            input_token_list: input_tokens,
+            sampler,
         };
         Result::<_, anyhow::Error>::Ok(task)
     }).await?
@@ -148,12 +148,12 @@ async fn chat_completion_req_to_task(
 
         let task = CompletionsTask {
             callback,
-            input_token_list: input_tokens,
-            sampler,
             maximum_tokens: min(
                 req.max_tokens.map(|n_tokens| n_tokens + input_tokens.len() as u32).unwrap_or(kv_cache_size_pre_task),
                 kv_cache_size_pre_task
-            )
+            ),
+            input_token_list: input_tokens,
+            sampler,
         };
         Result::<_, anyhow::Error>::Ok(task)
     }).await?
