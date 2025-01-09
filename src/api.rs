@@ -173,7 +173,7 @@ async fn v1_chat_completions(
             let out_stream = rx.into_stream()
                 .map(move |token| {
                     let text = ctx.model.token_to_str(token, Special::Plaintext)?;
-                    debug!("v1_chat_completions, gen token: {}", token);
+                    debug!("v1_chat_completions, gen token: {}", text);
 
                     let chat_completion_resp = async_openai::types::CreateChatCompletionStreamResponse {
                         id: chat_completion_id.clone(),
