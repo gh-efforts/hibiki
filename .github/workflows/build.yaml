@@ -1,5 +1,8 @@
 name: Release
 
+permissions:
+  contents: write
+
 on:
   push:
     tags:
@@ -36,7 +39,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: Jimver/cuda-toolkit@v0.2.19
+      - uses: Jimver/cuda-toolkit@v0.2
       - run: |
           $cudaPath = [System.Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
           $cublasDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublas64_12.dll'
