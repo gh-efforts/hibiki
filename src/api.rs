@@ -1,6 +1,6 @@
 use crate::CompletionsTask;
 use anyhow::{anyhow, ensure, Result};
-use async_openai::types::{ChatChoice, ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessageContent, ChatCompletionResponseMessage, Choice, Prompt, Role};
+use async_openai::types::{ChatChoice, ChatChoiceStream, ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessageContent, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, Choice, Prompt, Role};
 use axum::body::Body;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response, Sse};
@@ -168,7 +168,47 @@ async fn v1_chat_completions(
         send_to_backend(task, &*ctx).await?;
 
         let resp = if is_stream {
-            unimplemented!()
+            let out_stream = rx.into_stream()
+                .map(move |token| {
+                    let text = ctx.model.token_to_str(token, Special::Plaintext)?;
+
+                    let chat_completion_resp = async_openai::types::CreateChatCompletionStreamResponse {
+                        id: chat_completion_id.clone(),
+                        choices: vec![
+                            ChatChoiceStream {
+                                index: 0,
+                                #[allow(deprecated)]
+                                delta: ChatCompletionStreamResponseDelta {
+                                    content: Some(text),
+                                    refusal: None,
+                                    tool_calls: None,
+                                    role: Some(Role::Assistant),
+                                    function_call: None
+                                },
+                                finish_reason: None,
+                                logprobs: None,
+                            }
+                        ],
+                        created: Utc::now().timestamp() as u32,
+                        model: ctx.model_name.clone(),
+                        service_tier: None,
+                        system_fingerprint: None,
+                        object: String::from("chat.completion.chunk"),
+                        usage: None
+                    };
+
+                    let event = axum::response::sse::Event::default()
+                        .json_data(serde_json::to_vec(&chat_completion_resp)?)?;
+
+                    Result::<_, anyhow::Error>::Ok(event)
+                })
+                .chain(futures_util::stream::once(async {
+                    let event = axum::response::sse::Event::default()
+                        .data("[DONE]");
+                    Ok(event)
+                }));
+
+            Sse::new(out_stream).into_response()
         } else {
             let mut out_tokens = Vec::new();
             while let Ok(token) = rx.recv_async().await {
