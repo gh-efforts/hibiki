@@ -157,6 +157,8 @@ async fn v1_chat_completions(
     State(ctx): State<Arc<Context>>,
     Json(req): Json<async_openai::types::CreateChatCompletionRequest>
 ) -> Response {
+    debug!("v1_chat_completions: {:?}", req);
+
     let is_stream = req.stream.unwrap_or(false);
     let (tx, rx) = flume::unbounded();
     let chat_completion_id = rand::random::<u64>().to_string();
@@ -271,6 +273,8 @@ async fn v1_completions(
     State(ctx): State<Arc<Context>>,
     Json(req): Json<async_openai::types::CreateCompletionRequest>
 ) -> Response {
+    debug!("v1_completions: {:?}", req);
+
     let is_stream = req.stream.unwrap_or(false);
     let (tx, rx) = flume::unbounded();
     let completion_id = rand::random::<u64>().to_string();
