@@ -30,7 +30,7 @@ jobs:
             include: README.md,cublas64_12.dll,cublasLt64_12.dll
 
           # linux
-          - target: x86_64-unknown-linux-musl
+          - target: x86_64-unknown-linux-gnu
             os: ubuntu-22.04
             build_tool: cargo
             features: cuda
