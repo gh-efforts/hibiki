@@ -69,3 +69,4 @@ jobs:
           # (required)
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_TERM_COLOR: always
+          LLAMA_CPP_CUDA_ARCHITECTURES: all
