@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - v[0-9]+.*
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/create-gh-release-action@v1
+        env:
+          # (required)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  upload-assets:
+    strategy:
+      matrix:
+        include:
+          # windows
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            build_tool: cargo
+            features: cuda
+            include: README.md,cublas64_12.dll,cublasLt64_12.dll
+
+          # linux
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-22.04
+            build_tool: cargo
+            features: cuda
+            include: README.md
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Jimver/cuda-toolkit@v0.2.19
+      - run: |
+          $cudaPath = [System.Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
+          $cublasDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublas64_12.dll'
+          $cublasLtDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublasLt64_12.dll'
+          
+          $currentDir = Get-Location
+          Copy-Item -Path $cublasDll -Destination $currentDir
+          Copy-Item -Path $cublasLtDll -Destination $currentDir
+        if: matrix.os == 'windows-latest'
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          target: ${{ matrix.target }}
+          # (required)
+          bin: hibiki
+          # (optional) On which platform to distribute the `.tar.gz` file.
+          # [default value: unix]
+          # [possible values: all, unix, windows, none]
+          tar: unix
+          # (optional) On which platform to distribute the `.zip` file.
+          # [default value: windows]
+          # [possible values: all, unix, windows, none]
+          zip: windows
+          include:  ${{ matrix.include }}
+          build_tool: ${{ matrix.build_tool }}
+          features: ${{ matrix.features }}
+        env:
+          # (required)
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_TERM_COLOR: always

@@ -210,10 +210,10 @@ pub async fn run(
     model: Arc<LlamaModel>,
     backend: Arc<LlamaBackend>,
     task_rx: flume::Receiver<CompletionsTask>,
-    kv_cache_size_pre_task: u32
+    kv_cache_size_pre_task: u32,
+    n_tasks: u32
 ) -> Result<()> {
     let is_cancel = Arc::new(AtomicBool::new(false));
-    let n_tasks = 64;
 
     tokio::task::spawn_blocking(move || {
         completions_handler(

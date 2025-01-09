@@ -40,6 +40,9 @@ struct Args {
     #[arg(long)]
     model_name: String,
 
+    #[arg(short, long, default_value_t = 4)]
+    parallel_tasks: u32,
+
     #[arg(short, long, default_value_t = 512)]
     kv_cache_size_pre_task: u32,
 
@@ -94,7 +97,8 @@ fn exec(args: Args) -> Result<()> {
             model.clone(),
             backend,
             rx,
-            args.kv_cache_size_pre_task
+            args.kv_cache_size_pre_task,
+            args.parallel_tasks
         );
 
         let api_handle = api::run(
