@@ -13,6 +13,7 @@ use llama_cpp_2::token::LlamaToken;
 use std::cmp::min;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use axum::http::StatusCode;
 use futures_util::StreamExt;
 
@@ -213,7 +214,13 @@ async fn v1_chat_completions(
                     Ok(event)
                 }));
 
-            Sse::new(out_stream).into_response()
+            Sse::new(out_stream)
+                .keep_alive(
+                    axum::response::sse::KeepAlive::new()
+                        .interval(Duration::from_secs(1))
+                        .text("keep-alive-text"),
+                )
+                .into_response()
         } else {
             let mut out_tokens = Vec::new();
             while let Ok(token) = rx.recv_async().await {
