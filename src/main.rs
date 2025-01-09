@@ -43,9 +43,6 @@ struct Args {
     #[arg(short, long, default_value_t = 512)]
     kv_cache_size_pre_task: u32,
 
-    #[arg(long, default_value_t = 1024)]
-    maximum_tokens: u32,
-
     #[arg(short, long)]
     template: Option<String>
 }
@@ -104,7 +101,6 @@ fn exec(args: Args) -> Result<()> {
             args.bind_addr,
             model,
             args.model_name,
-            args.maximum_tokens,
             args.kv_cache_size_pre_task,
             tx,
             args.template

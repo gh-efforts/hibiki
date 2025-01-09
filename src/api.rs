@@ -20,7 +20,6 @@ use futures_util::StreamExt;
 struct Context {
     model: Arc<LlamaModel>,
     model_name: String,
-    maximum_tokens: u32,
     backend_bridge: flume::Sender<CompletionsTask>,
     kv_cache_size_pre_task: u32,
     chat_template: Option<String>,
@@ -30,7 +29,7 @@ async fn completion_req_to_task(
     req: async_openai::types::CreateCompletionRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
-    maximum_tokens: u32
+    kv_cache_size_pre_task: u32,
 ) -> Result<CompletionsTask> {
     tokio::task::spawn_blocking(move || {
         let input_tokens = match req.prompt {
@@ -56,7 +55,10 @@ async fn completion_req_to_task(
             callback,
             input_token_list: input_tokens,
             sampler,
-            maximum_tokens: min(req.max_tokens.unwrap_or(maximum_tokens), maximum_tokens)
+            maximum_tokens: min(
+                req.max_tokens.map(|n_tokens| n_tokens + input_tokens.len() as u32).unwrap_or(kv_cache_size_pre_task),
+                kv_cache_size_pre_task
+            )
         };
         Result::<_, anyhow::Error>::Ok(task)
     }).await?
@@ -84,7 +86,7 @@ async fn chat_completion_req_to_task(
     req: async_openai::types::CreateChatCompletionRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
-    maximum_tokens: u32,
+    kv_cache_size_pre_task: u32,
     template: Option<String>,
 ) -> Result<CompletionsTask> {
     tokio::task::spawn_blocking(move || {
@@ -148,7 +150,10 @@ async fn chat_completion_req_to_task(
             callback,
             input_token_list: input_tokens,
             sampler,
-            maximum_tokens: min(req.max_tokens.unwrap_or(maximum_tokens), maximum_tokens)
+            maximum_tokens: min(
+                req.max_tokens.map(|n_tokens| n_tokens + input_tokens.len() as u32).unwrap_or(kv_cache_size_pre_task),
+                kv_cache_size_pre_task
+            )
         };
         Result::<_, anyhow::Error>::Ok(task)
     }).await?
@@ -165,9 +170,9 @@ async fn v1_chat_completions(
     let chat_completion_id = rand::random::<u64>().to_string();
 
     let fut = async {
-        let task = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.maximum_tokens, ctx.chat_template.clone()).await?;
+        let task = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.kv_cache_size_pre_task, ctx.chat_template.clone()).await?;
         let prompt_tokens = task.input_token_list.len() as u32;
-        ensure!(prompt_tokens <= ctx.kv_cache_size_pre_task, "Prompt too large");
+        ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
         send_to_backend(task, &*ctx).await?;
 
         let resp = if is_stream {
@@ -290,9 +295,9 @@ async fn v1_completions(
     let completion_id = rand::random::<u64>().to_string();
 
     let fut = async {
-        let task = completion_req_to_task(req, ctx.model.clone(), tx, ctx.maximum_tokens,).await?;
+        let task = completion_req_to_task(req, ctx.model.clone(), tx, ctx.kv_cache_size_pre_task).await?;
         let prompt_tokens = task.input_token_list.len() as u32;
-        ensure!(prompt_tokens <= ctx.kv_cache_size_pre_task, "Prompt too large");
+        ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
         send_to_backend(task, &*ctx).await?;
 
         let resp = if is_stream {
@@ -377,7 +382,6 @@ pub async fn run(
     bind_addr: SocketAddr,
     model: Arc<LlamaModel>,
     model_name: String,
-    maximum_tokens: u32,
     kv_cache_size_pre_task: u32,
     backend_bridge: flume::Sender<CompletionsTask>,
     template: Option<String>,
@@ -385,7 +389,6 @@ pub async fn run(
     let ctx = Context {
         model,
         model_name,
-        maximum_tokens,
         backend_bridge,
         kv_cache_size_pre_task,
         chat_template: template
