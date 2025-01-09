@@ -1,5 +1,5 @@
 use crate::CompletionsTask;
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, Result};
 use flume::RecvTimeoutError;
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
@@ -9,8 +9,8 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
-use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use std::time::Duration;
 
 struct Sequence {
@@ -18,9 +18,7 @@ struct Sequence {
     sampler: LlamaSampler,
     callback: flume::Sender<LlamaToken>,
     token_pos: u32,
-    kv_cache_count: u32,
     maximum_tokens: u32,
-    ctx_size: u32,
 }
 
 struct SequenceSlots<'a> {
@@ -83,7 +81,6 @@ impl <'a> SequenceSlots<'a> {
         }
 
         let sequence_list = &mut self.sequence_list;
-        let mut kv_cache_shift = false;
 
         for (i, slot) in sequence_list.iter_mut().enumerate() {
             if let Some(seq) = slot {
@@ -92,7 +89,6 @@ impl <'a> SequenceSlots<'a> {
                 macro_rules! remove_slot {
                     () => {
                         *slot = None;
-                        kv_cache_shift = true;
                         ctx.clear_kv_cache_seq(Some(i as u32), None, None)?;
                     };
                 }
@@ -113,20 +109,9 @@ impl <'a> SequenceSlots<'a> {
                 seq.sampler.accept(out_token);
 
                 seq.token_pos += 1;
-                seq.kv_cache_count += 1;
-
-                if seq.kv_cache_count > seq.ctx_size {
-                    kv_cache_shift = true;
-                    let past = seq.token_pos - 1;
-                    ensure!(ctx.clear_kv_cache_seq(Some(i as u32), None, Some(past - seq.ctx_size / 2))?);
-                    seq.kv_cache_count -= seq.ctx_size / 2;
-                }
             }
         }
 
-        if kv_cache_shift {
-            ctx.kv_cache_defrag();
-        }
         Ok(slot_size)
     }
 }
@@ -146,8 +131,6 @@ fn completions_handler(
 
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
-
-    let ctx_size = ctx.n_ctx() / n_tasks;
 
     let mut sequence_slots = SequenceSlots::new(n_tasks, &mut batch, model);
 
@@ -170,9 +153,7 @@ fn completions_handler(
                 sampler: task.sampler,
                 callback: task.callback,
                 token_pos: task.input_token_list.len() as u32,
-                kv_cache_count: task.input_token_list.len() as u32,
                 input_tokens: task.input_token_list,
-                ctx_size,
                 maximum_tokens: task.maximum_tokens
             };
 
@@ -186,9 +167,7 @@ fn completions_handler(
                         sampler: task.sampler,
                         callback: task.callback,
                         token_pos: task.input_token_list.len() as u32,
-                        kv_cache_count: task.input_token_list.len() as u32,
                         input_tokens: task.input_token_list,
-                        ctx_size,
                         maximum_tokens: task.maximum_tokens
                     };
 
