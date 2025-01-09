@@ -172,6 +172,8 @@ async fn v1_chat_completions(
         let resp = if is_stream {
             let out_stream = rx.into_stream()
                 .map(move |token| {
+                    debug!("v1_chat_completions, gen token: {}", token);
+
                     let text = ctx.model.token_to_str(token, Special::Plaintext)?;
 
                     let chat_completion_resp = async_openai::types::CreateChatCompletionStreamResponse {
@@ -205,6 +207,8 @@ async fn v1_chat_completions(
                     Result::<_, anyhow::Error>::Ok(event)
                 })
                 .chain(futures_util::stream::once(async {
+                    debug!("v1_chat_completions stream end");
+
                     let event = axum::response::sse::Event::default()
                         .data("[DONE]");
                     Ok(event)
