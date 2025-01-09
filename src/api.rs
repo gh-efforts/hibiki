@@ -202,7 +202,7 @@ async fn v1_chat_completions(
                     };
 
                     let event = axum::response::sse::Event::default()
-                        .json_data(serde_json::to_vec(&chat_completion_resp)?)?;
+                        .json_data(&chat_completion_resp)?;
 
                     Result::<_, anyhow::Error>::Ok(event)
                 })
@@ -316,7 +316,7 @@ async fn v1_completions(
                     };
 
                     let event = axum::response::sse::Event::default()
-                        .json_data(serde_json::to_vec(&completion_resp)?)?;
+                        .json_data(&completion_resp)?;
 
                     Result::<_, anyhow::Error>::Ok(event)
                 })
