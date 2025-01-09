@@ -1,3 +1,4 @@
+use std::cmp::min;
 use crate::CompletionsTask;
 use anyhow::{anyhow, Result};
 use flume::RecvTimeoutError;
@@ -153,8 +154,11 @@ fn completions_handler(
                 sampler: task.sampler,
                 callback: task.callback,
                 token_pos: task.input_token_list.len() as u32,
+                maximum_tokens: min(
+                    task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
+                    kv_cache_size_pre_task
+                ),
                 input_tokens: task.input_token_list,
-                maximum_tokens: task.maximum_tokens
             };
 
             sequence_slots.put(sequence)?;
@@ -167,8 +171,11 @@ fn completions_handler(
                         sampler: task.sampler,
                         callback: task.callback,
                         token_pos: task.input_token_list.len() as u32,
+                        maximum_tokens: min(
+                            task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
+                            kv_cache_size_pre_task
+                        ),
                         input_tokens: task.input_token_list,
-                        maximum_tokens: task.maximum_tokens
                     };
 
                     sequence_slots.put(sequence)?;

@@ -10,7 +10,6 @@ use chrono::Utc;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
-use std::cmp::min;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -29,7 +28,6 @@ async fn completion_req_to_task(
     req: async_openai::types::CreateCompletionRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
-    kv_cache_size_pre_task: u32,
 ) -> Result<CompletionsTask> {
     tokio::task::spawn_blocking(move || {
         let input_tokens = match req.prompt {
@@ -53,10 +51,7 @@ async fn completion_req_to_task(
 
         let task = CompletionsTask {
             callback,
-            maximum_tokens: min(
-                req.max_tokens.map(|n_tokens| n_tokens + input_tokens.len() as u32).unwrap_or(kv_cache_size_pre_task),
-                kv_cache_size_pre_task
-            ),
+            maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
             sampler,
         };
@@ -86,7 +81,6 @@ async fn chat_completion_req_to_task(
     req: async_openai::types::CreateChatCompletionRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
-    kv_cache_size_pre_task: u32,
     template: Option<String>,
 ) -> Result<CompletionsTask> {
     tokio::task::spawn_blocking(move || {
@@ -148,10 +142,7 @@ async fn chat_completion_req_to_task(
 
         let task = CompletionsTask {
             callback,
-            maximum_tokens: min(
-                req.max_tokens.map(|n_tokens| n_tokens + input_tokens.len() as u32).unwrap_or(kv_cache_size_pre_task),
-                kv_cache_size_pre_task
-            ),
+            maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
             sampler,
         };
@@ -170,7 +161,7 @@ async fn v1_chat_completions(
     let chat_completion_id = rand::random::<u64>().to_string();
 
     let fut = async {
-        let task = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.kv_cache_size_pre_task, ctx.chat_template.clone()).await?;
+        let task = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.chat_template.clone()).await?;
         let prompt_tokens = task.input_token_list.len() as u32;
         ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
         send_to_backend(task, &*ctx).await?;
@@ -295,7 +286,7 @@ async fn v1_completions(
     let completion_id = rand::random::<u64>().to_string();
 
     let fut = async {
-        let task = completion_req_to_task(req, ctx.model.clone(), tx, ctx.kv_cache_size_pre_task).await?;
+        let task = completion_req_to_task(req, ctx.model.clone(), tx).await?;
         let prompt_tokens = task.input_token_list.len() as u32;
         ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
         send_to_backend(task, &*ctx).await?;

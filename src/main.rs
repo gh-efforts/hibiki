@@ -25,7 +25,7 @@ struct CompletionsTask {
     callback: flume::Sender<LlamaToken>,
     input_token_list: Vec<LlamaToken>,
     sampler: LlamaSampler,
-    maximum_tokens: u32
+    maximum_tokens: Option<u32>
 }
 
 #[derive(Parser)]
