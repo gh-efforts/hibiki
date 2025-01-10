@@ -46,7 +46,7 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String], decode_ms: &AtomicU64,
                 let ctx_size = session.n_ctx() / batch_size as u32;
                 let mut batch = LlamaBatch::new(512, 1);
                 let mut sampler = LlamaSampler::chain_simple([
-                    LlamaSampler::dist(3234),
+                    LlamaSampler::greedy(),
                 ]);
 
                 // let input = model.apply_chat_template(Some("llama2".to_string()), vec![LlamaChatMessage::new("user".to_string(), "Hello!".to_string())?], false)?;
