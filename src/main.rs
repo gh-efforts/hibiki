@@ -20,6 +20,8 @@ use log::LevelFilter;
 
 mod api;
 mod infer;
+mod metadata;
+mod sampler;
 
 struct CompletionsTask {
     callback: flume::Sender<LlamaToken>,

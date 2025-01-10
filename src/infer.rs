@@ -99,7 +99,7 @@ impl <'a> SequenceSlots<'a> {
                     continue;
                 }
 
-                seq.callback.send(out_token)?;
+                let _res = seq.callback.send(out_token);
 
                 if seq.token_pos + 1 >= seq.maximum_tokens {
                     remove_slot!();
