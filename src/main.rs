@@ -8,11 +8,11 @@ use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::sampling::LlamaSampler;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
+fn exec(decode_count: &AtomicU32, prompt_list: &[String], decode_ms: &AtomicU64, sampler_ms: &AtomicU64) -> Result<()> {
     // assert_eq!(prompt_list.len() % 8, 0);
 
     let hf = hf_hub::api::sync::Api::new()?;
@@ -75,10 +75,12 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
                         break;
                     }
 
+                    let t = Instant::now();
                     if let Err(e) = session.decode(&mut batch) {
                         eprintln!("failed to decode: {:?}, curr: {}, use cells: {}", e, tokens_count[0], session.get_kv_cache_used_cells());
                         return Err(anyhow::anyhow!("failed to decode: {:?}", e));
                     }
+                    decode_ms.store(t.elapsed().as_millis() as u64, Ordering::Relaxed);
                     batch.clear();
 
                     for seq_id in 0..batch_size as usize {
@@ -86,7 +88,10 @@ fn exec(decode_count: &AtomicU32, prompt_list: &[String]) -> Result<()> {
                             continue;
                         }
 
+                        let t = Instant::now();
                         let out = sampler.sample(&session,-1);
+                        sampler_ms.store(t.elapsed().as_millis() as u64, Ordering::Relaxed);
+
                         decode_count.fetch_add(1, Ordering::Relaxed);
 
                         if model.is_eog_token(out) {
@@ -131,22 +136,31 @@ fn main() {
     let prompt_list = std::fs::read(prompt_list_path).unwrap();
     let prompt_list: Vec<String> = serde_json::from_slice(&prompt_list).unwrap();
     let decode_count = Arc::new(AtomicU32::new(0));
+    let decode_ms = Arc::new(AtomicU64::new(0));
+    let sampler_ms = Arc::new(AtomicU64::new(0));
 
     std::thread::spawn({
         let decode_count = decode_count.clone();
+        let decode_ms = decode_ms.clone();
+        let sampler_ms = sampler_ms.clone();
 
         move || {
-            exec(decode_count.as_ref(), &prompt_list).unwrap();
+            exec(decode_count.as_ref(), &prompt_list, &decode_ms, &sampler_ms).unwrap();
         }
     });
 
     // wait llama.cpp setup
     std::thread::sleep(Duration::from_secs(5));
     decode_count.store(0, Ordering::Relaxed);
+    decode_ms.store(0, Ordering::Relaxed);
+    sampler_ms.store(0, Ordering::Relaxed);
 
     loop {
         std::thread::sleep(Duration::from_secs(1));
         let count = decode_count.swap(0, Ordering::Relaxed);
-        println!("decode count: {}", count);
+        let dec_ms = decode_ms.swap(0, Ordering::Relaxed);
+        let samp_ms = sampler_ms.swap(0, Ordering::Relaxed);
+
+        println!("decode count: {}, decode ms: {}, sampler ms: {}", count, dec_ms, samp_ms);
     }
 }
