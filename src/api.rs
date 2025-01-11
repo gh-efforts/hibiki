@@ -32,7 +32,7 @@ async fn completion_req_to_task(
     tokio::task::spawn_blocking(move || {
         let input_tokens = match req.prompt {
             Prompt::String(prompt) => {
-                model.str_to_token(&prompt, AddBos::Always)?
+                model.str_to_token(&prompt, AddBos::Never)?
             }
             _ => return Err(anyhow!("Only string prompts are supported")),
         };
@@ -125,8 +125,8 @@ async fn chat_completion_req_to_task(
             chat_messages.push(chat_msg);
         }
 
-        let prompt = model.apply_chat_template(template, chat_messages, false)?;
-        let input_tokens = model.str_to_token(&prompt, AddBos::Always)?;
+        let prompt = model.apply_chat_template(template, chat_messages, true)?;
+        let input_tokens = model.str_to_token(&prompt, AddBos::Never)?;
 
         let sampler = LlamaSampler::chain_simple([
             LlamaSampler::temp(req.temperature.unwrap_or(1.0)),

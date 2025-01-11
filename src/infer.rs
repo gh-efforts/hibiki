@@ -13,10 +13,11 @@ use std::num::NonZeroU32;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
+use crate::sampler::Sampler;
 
 struct Sequence {
     input_tokens: Vec<LlamaToken>,
-    sampler: LlamaSampler,
+    sampler: Sampler,
     callback: flume::Sender<LlamaToken>,
     token_pos: u32,
     maximum_tokens: u32,
@@ -151,7 +152,13 @@ fn completions_handler(
             };
 
             let sequence = Sequence {
-                sampler: task.sampler,
+                sampler: {
+                    let mut sampler = Sampler::new(model);
+                    for x in &task.input_token_list {
+                        sampler.accept(*x);
+                    }
+                    sampler
+                },
                 callback: task.callback,
                 token_pos: task.input_token_list.len() as u32,
                 maximum_tokens: min(
@@ -168,7 +175,13 @@ fn completions_handler(
             match task_rx.try_recv() {
                 Ok(task) => {
                     let sequence = Sequence {
-                        sampler: task.sampler,
+                        sampler: {
+                            let mut sampler = Sampler::new(model);
+                            for x in &task.input_token_list {
+                                sampler.accept(*x);
+                            }
+                            sampler
+                        },
                         callback: task.callback,
                         token_pos: task.input_token_list.len() as u32,
                         maximum_tokens: min(
