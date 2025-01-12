@@ -8,13 +8,13 @@ use axum::routing::post;
 use axum::{Json, Router};
 use chrono::Utc;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
-use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use axum::http::StatusCode;
 use futures_util::StreamExt;
+use crate::sampler::Sampler;
 
 struct Context {
     model: Arc<LlamaModel>,
@@ -32,22 +32,19 @@ async fn completion_req_to_task(
     tokio::task::spawn_blocking(move || {
         let input_tokens = match req.prompt {
             Prompt::String(prompt) => {
-                model.str_to_token(&prompt, AddBos::Never)?
+                model.str_to_token(&prompt, AddBos::Always)?
             }
             _ => return Err(anyhow!("Only string prompts are supported")),
         };
 
-        let sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(req.temperature.unwrap_or(1.0)),
-            LlamaSampler::top_p(req.top_p.unwrap_or(1.0), 1),
-            LlamaSampler::penalties_simple(
-                -1,
-                1.0,
-                req.frequency_penalty.unwrap_or(0.0),
-                req.presence_penalty.unwrap_or(0.0)
-            ),
-            LlamaSampler::dist(req.seed.map(|v| v as u32).unwrap_or_else(|| rand::random()))
-        ]);
+        let sampler = Sampler::new(
+            &model,
+            req.frequency_penalty,
+            req.presence_penalty,
+            req.seed,
+            req.temperature,
+            req.top_p
+        );
 
         let task = CompletionsTask {
             callback,
@@ -126,22 +123,20 @@ async fn chat_completion_req_to_task(
         }
 
         let prompt = model.apply_chat_template(template, chat_messages, true)?;
-        let input_tokens = model.str_to_token(&prompt, AddBos::Never)?;
+        let input_tokens = model.str_to_token(&prompt, AddBos::Always)?;
 
-        let sampler = LlamaSampler::chain_simple([
-            LlamaSampler::temp(req.temperature.unwrap_or(1.0)),
-            LlamaSampler::top_p(req.top_p.unwrap_or(1.0), 1),
-            LlamaSampler::penalties_simple(
-                -1,
-                1.0,
-                req.frequency_penalty.unwrap_or(0.0),
-                req.presence_penalty.unwrap_or(0.0)
-            ),
-            LlamaSampler::dist(req.seed.map(|v| v as u32).unwrap_or_else(|| rand::random()))
-        ]);
+        let sampler = Sampler::new(
+            &model,
+            req.frequency_penalty,
+            req.presence_penalty,
+            req.seed,
+            req.temperature,
+            req.top_p
+        );
 
         let task = CompletionsTask {
             callback,
+            #[allow(deprecated)]
             maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
             sampler,
@@ -237,7 +232,8 @@ async fn v1_chat_completions(
                             refusal: None,
                             tool_calls: None,
                             role: Role::Assistant,
-                            function_call: None
+                            function_call: None,
+                            audio: None
                         },
                         finish_reason: None,
                         logprobs: None,

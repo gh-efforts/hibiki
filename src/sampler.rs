@@ -7,10 +7,39 @@ pub struct Sampler {
     inner: *mut HibikiCommonSampler
 }
 
+unsafe impl Send for Sampler {}
+unsafe impl Sync for Sampler {}
+
 impl Sampler {
-    pub fn new(model: &LlamaModel) -> Sampler {
+    pub fn new(
+        model: &LlamaModel,
+        frequency_penalty: Option<f32>,
+        presence_penalty: Option<f32>,
+        seed: Option<i64>,
+        temperature: Option<f32>,
+        top_p: Option<f32>,
+    ) -> Sampler {
         unsafe {
             let params = llama_cpp_sys_2::hibiki_common_params_sampling_init();
+
+            if let Some(f) = frequency_penalty {
+                llama_cpp_sys_2::hibiki_common_params_sampling_set_frequency_penalty(params, f);
+            }
+
+            if let Some(p) = presence_penalty {
+                llama_cpp_sys_2::hibiki_common_params_sampling_set_presence_penalty(params, p);
+            }
+
+            llama_cpp_sys_2::hibiki_common_params_sampling_set_seed(params, seed.map(|v| v as i32).unwrap_or_else(|| rand::random()));
+
+            if let Some(t) = temperature {
+                llama_cpp_sys_2::hibiki_common_params_sampling_set_temperature(params, t);
+            }
+
+            if let Some(t) = top_p {
+                llama_cpp_sys_2::hibiki_common_params_sampling_set_top_p(params, t);
+            }
+
             let inner = llama_cpp_sys_2::hibiki_common_sampler_init(model.as_ptr(), params);
             llama_cpp_sys_2::hibiki_common_params_sampling_free(params);
 

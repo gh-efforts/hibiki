@@ -7,7 +7,6 @@ use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 use std::num::NonZeroU32;
 use std::sync::atomic::AtomicBool;
@@ -152,13 +151,7 @@ fn completions_handler(
             };
 
             let sequence = Sequence {
-                sampler: {
-                    let mut sampler = Sampler::new(model);
-                    for x in &task.input_token_list {
-                        sampler.accept(*x);
-                    }
-                    sampler
-                },
+                sampler: task.sampler,
                 callback: task.callback,
                 token_pos: task.input_token_list.len() as u32,
                 maximum_tokens: min(
@@ -175,13 +168,7 @@ fn completions_handler(
             match task_rx.try_recv() {
                 Ok(task) => {
                     let sequence = Sequence {
-                        sampler: {
-                            let mut sampler = Sampler::new(model);
-                            for x in &task.input_token_list {
-                                sampler.accept(*x);
-                            }
-                            sampler
-                        },
+                        sampler: task.sampler,
                         callback: task.callback,
                         token_pos: task.input_token_list.len() as u32,
                         maximum_tokens: min(

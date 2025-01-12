@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
-use llama_cpp_2::sampling::LlamaSampler;
 use clap::Parser;
 use llama_cpp_2::token::LlamaToken;
 use anyhow::Result;
@@ -17,16 +16,18 @@ use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
 use log::LevelFilter;
+use crate::sampler::Sampler;
 
 mod api;
 mod infer;
-mod metadata;
 mod sampler;
+#[allow(unused)]
+mod metadata;
 
 struct CompletionsTask {
     callback: flume::Sender<LlamaToken>,
     input_token_list: Vec<LlamaToken>,
-    sampler: LlamaSampler,
+    sampler: Sampler,
     maximum_tokens: Option<u32>
 }
 
