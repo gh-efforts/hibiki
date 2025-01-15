@@ -16,13 +16,13 @@ axum = { version = "0.8" }
 log = "0.4"
 log4rs = "1"
 async-openai = {version = "0.27", default-features = false}
-flume = { version = "0.11", default-features = false, features = ["async"] }
+flume = { version = "0.11", default-features = false, features = ["async", "select"] }
 rand = "0.8"
 chrono = "0.4"
 futures-util = { version = "0.3" , default-features = false }
 
 [features]
-cuda = ["llama-cpp-2/cuda"]
+#cuda = ["llama-cpp-2/cuda"]
 dynlink = ["llama-cpp-2/dynamic-link"]
 
 [profile.release]

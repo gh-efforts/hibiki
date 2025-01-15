@@ -1,18 +1,22 @@
-use std::cmp::min;
+use crate::sampler::Sampler;
 use crate::CompletionsTask;
-use anyhow::{anyhow, Result};
-use flume::RecvTimeoutError;
+use anyhow::{anyhow, ensure, Result};
+use flume::{RecvTimeoutError, TryRecvError};
 use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::token::LlamaToken;
+use std::cell::RefCell;
+use std::cmp::min;
+use std::collections::BTreeMap;
 use std::num::NonZeroU32;
+use std::ptr::eq;
+use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::sampler::Sampler;
 
 struct Sequence {
     input_tokens: Vec<LlamaToken>,
@@ -190,6 +194,469 @@ fn completions_handler(
         sequence_slots.batch_decode(&mut ctx)?;
         sequence_slots.batch_sample(&mut ctx)?;
     }
+}
+
+enum SpeculativeCompletionsTargetInput {
+    PromptInput {
+        token_list: Vec<LlamaToken>
+    },
+    DraftInput {
+        draft_token_list: Vec<LlamaToken>
+    },
+}
+
+struct SpeculativeCompletionsTargetOutput {
+    accept_token_n: u32,
+    next_token: Option<LlamaToken>
+}
+
+struct SpeculativeCompletionsTargetTask {
+    frequency_penalty: Option<f32>,
+    presence_penalty: Option<f32>,
+    seed: Option<i64>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
+    input_channel: flume::Receiver<SpeculativeCompletionsTargetInput>,
+    output_channel: flume::Sender<SpeculativeCompletionsTargetOutput>
+}
+
+struct SpeculativeCompletionsTargetSequence {
+    prompt_token_list: Vec<LlamaToken>,
+    accepted_token_list: Vec<LlamaToken>,
+    sampler: Sampler,
+    input_channel: flume::Receiver<SpeculativeCompletionsTargetInput>,
+    output_channel: flume::Sender<SpeculativeCompletionsTargetOutput>,
+}
+
+struct SpeculativeCompletionsTargetSequenceSlots<'a> {
+    sequence_list: Vec<Option<SpeculativeCompletionsTargetSequence>>,
+    batch: &'a mut LlamaBatch,
+    model: &'a LlamaModel,
+}
+
+impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
+    fn new(n_task: u32, batch: &'a mut LlamaBatch, model: &'a LlamaModel) -> Self {
+        let mut sequence_list = Vec::with_capacity(n_task as usize);
+
+        for _ in 0..n_task {
+            sequence_list.push(None);
+        }
+
+        Self {
+            sequence_list,
+            batch,
+            model,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.sequence_list.iter()
+            .filter(|v| v.is_some())
+            .count()
+    }
+
+    fn put(&mut self, seq: SpeculativeCompletionsTargetSequence) -> Result<()> {
+        for slot in self.sequence_list.iter_mut() {
+            if slot.is_some() {
+                continue;
+            }
+
+            *slot = Some(seq);
+            return Ok(());
+        }
+        Err(anyhow!("No available slot"))
+    }
+
+    fn clear_closed(&mut self, ctx: &mut LlamaContext, select_tmp: &mut Option<(u32, SpeculativeCompletionsTargetInput)>) -> Result<usize> {
+        let mut out = 0;
+
+        for (seq_id, seq_opt) in self.sequence_list.iter_mut().enumerate() {
+            if let Some(seq) = seq_opt {
+                if seq.input_channel.is_disconnected() {
+                    if let Some((id, _)) = select_tmp.as_ref() {
+                        if *id == seq_id as u32 {
+                            *select_tmp = None;
+                        }
+                    }
+                    *seq_opt = None;
+                    ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None)?;
+                    out += 1;
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    // (seq_id, task_input)
+    fn poll(&mut self, ctx: &mut LlamaContext, mut select_task: Option<(u32, SpeculativeCompletionsTargetInput)>) -> Result<u32> {
+        // token_pos -> seq_ids
+        let mut sampler_mapping: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        // seq_id -> draft_token_list
+        let mut draft_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
+        let mut decode_n: u32 = 0;
+
+        for (id, seq) in self.sequence_list.iter_mut().enumerate() {
+            if let Some(seq) = seq {
+                let select_task_id_eq = select_task.as_ref().map(|(seq_id, _)| id as u32 == *seq_id).unwrap_or(false);
+
+                let input_task = if select_task_id_eq {
+                    select_task.take().map(|(_, task)| task)
+                } else {
+                    seq.input_channel.try_recv().ok()
+                };
+
+                match input_task {
+                    Some(task) => {
+                        match task {
+                            SpeculativeCompletionsTargetInput::PromptInput { token_list } => {
+                                seq.prompt_token_list = token_list;
+                            }
+                            SpeculativeCompletionsTargetInput::DraftInput { draft_token_list } => {
+                                if seq.accepted_token_list.len() == 0 {
+                                    self.batch.add_sequence(&seq.prompt_token_list, id as i32, false)?;
+                                    sampler_mapping.entry(seq.prompt_token_list.len() as u32 - 1).or_insert_with(Vec::new).push(id as u32);
+                                } else {
+                                    let mut tokens = Vec::with_capacity(draft_token_list.len());
+                                    tokens.push(seq.accepted_token_list.last().unwrap().clone());
+                                    tokens.extend_from_slice(&draft_token_list[..draft_token_list.len() - 1]);
+
+                                    let mut idx = 0;
+                                    for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
+                                        self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
+                                        idx += 1;
+                                    }
+                                }
+
+                                draft_mapping.insert(id as u32, draft_token_list);
+                                decode_n += 1;
+                            }
+                        }
+                    }
+                    None => continue,
+                }
+            }
+        }
+
+        if decode_n == 0 {
+            return Ok(0);
+        }
+
+        ctx.decode(self.batch)?;
+        self.batch.clear();
+
+        // seq_id -> tokens
+        let mut out_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
+
+        for (pos, seq_ids) in sampler_mapping {
+            for seq_id in seq_ids {
+                let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
+                let token = seq.sampler.sample(ctx, pos as i32);
+                seq.sampler.accept(token);
+
+                out_mapping.entry(seq_id).or_insert_with(Vec::new).push(token);
+            }
+        }
+
+        for (seq_id, out_tokens) in out_mapping {
+            let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
+
+            let draft_tokens = draft_mapping.get(&seq_id).unwrap();
+            let mut accept_n = 0;
+            for i in 0..out_tokens.len() {
+                if out_tokens[i] != draft_tokens[i] {
+                    break;
+                }
+                accept_n += 1;
+            }
+
+            if seq.accepted_token_list.is_empty() {
+                seq.accepted_token_list.extend_from_slice(&seq.prompt_token_list);
+                seq.accepted_token_list.extend_from_slice(&out_tokens[..accept_n]);
+            } else {
+                seq.accepted_token_list.extend_from_slice(&out_tokens[..accept_n]);
+            }
+
+            let next_token = if accept_n == out_tokens.len() {
+                None
+            } else {
+                let next_token = out_tokens[accept_n];
+                seq.accepted_token_list.push(next_token);
+                Some(next_token)
+            };
+
+            let out = SpeculativeCompletionsTargetOutput {
+                accept_token_n: accept_n as u32,
+                next_token
+            };
+
+            let _ = seq.output_channel.send(out);
+        }
+        Ok(decode_n)
+    }
+}
+
+fn speculative_completions_target_handler(
+    model: &LlamaModel,
+    backend: &LlamaBackend,
+    task_rx: &flume::Receiver<SpeculativeCompletionsTargetTask>,
+    n_tasks: u32,
+    kv_cache_size_pre_task: u32,
+    is_cancel: &AtomicBool
+) -> Result<()> {
+    let ctx_params = LlamaContextParams::default()
+        .with_offload_kqv(true)
+        .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
+        .with_n_batch(n_tasks * kv_cache_size_pre_task);
+
+    let mut ctx = model.new_context(backend, ctx_params)?;
+    let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
+
+    let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model);
+
+    let select_tmp = RefCell::new(None);
+    loop {
+        slots.clear_closed(&mut ctx, &mut *select_tmp.borrow_mut())?;
+
+        while slots.len() < n_tasks as usize {
+            match task_rx.try_recv() {
+                Ok(task) => {
+                    let input_channel = task.input_channel;
+                    let output_channel = task.output_channel;
+
+                    let sequence = SpeculativeCompletionsTargetSequence {
+                        sampler: Sampler::new(
+                            model,
+                            task.frequency_penalty,
+                            task.presence_penalty,
+                            task.seed,
+                            task.temperature,
+                            task.top_p
+                        ),
+                        input_channel,
+                        output_channel,
+                        prompt_token_list: Vec::new(),
+                        accepted_token_list: Vec::new(),
+                    };
+
+                    slots.put(sequence)?;
+                }
+                Err(flume::TryRecvError::Empty) => break,
+                Err(flume::TryRecvError::Disconnected) => {
+                    return Err(anyhow!("Task channel disconnected"));
+                }
+            }
+        }
+
+        slots.poll(&mut ctx, select_tmp.take())?;
+
+        let mut selector = flume::Selector::new();
+
+        for (seq_id, seq_op) in slots.sequence_list.iter().enumerate() {
+            if let Some(seq) = seq_op {
+                selector = selector.recv(&seq.input_channel, {
+                    let select_tmp = &select_tmp;
+                    move |res| {
+                        *select_tmp.borrow_mut() = res.ok().map(|input|(seq_id as u32, input));
+                    }
+                })
+            }
+        }
+
+        let mut task = Rc::new(RefCell::new(None));
+
+        if slots.len() < n_tasks as usize {
+            selector = selector.recv(&task_rx, {
+                let task = task.clone();
+                move |task_res| *task.borrow_mut() = Some(task_res)
+            });
+        }
+        selector.wait();
+
+        if let Some(task) = task.take() {
+            let task = task?;
+            let input_channel = task.input_channel;
+            let output_channel = task.output_channel;
+
+            let sequence = SpeculativeCompletionsTargetSequence {
+                sampler: Sampler::new(
+                    model,
+                    task.frequency_penalty,
+                    task.presence_penalty,
+                    task.seed,
+                    task.temperature,
+                    task.top_p
+                ),
+                input_channel,
+                output_channel,
+                prompt_token_list: Vec::new(),
+                accepted_token_list: Vec::new(),
+            };
+
+            slots.put(sequence)?;
+        };
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq)]
+enum DraftSequenceState {
+    Decode,
+    WaitConfirm,
+}
+
+struct SpeculativeCompletionsDraftSequence {
+    state: DraftSequenceState,
+    prompt_tokens: Vec<LlamaToken>,
+    confirmed_tokens: Vec<LlamaToken>,
+    unconfirmed_tokens: Vec<LlamaToken>,
+    sampler: Sampler,
+    api_channel: flume::Sender<LlamaToken>,
+    target_channel: flume::Sender<SpeculativeCompletionsTargetInput>,
+    callback_channel: flume::Receiver<SpeculativeCompletionsTargetOutput>,
+    maximum_tokens: u32,
+}
+
+struct SpeculativeCompletionsDraftSequenceSlots<'a> {
+    sequence_list: Vec<Option<SpeculativeCompletionsDraftSequence>>,
+    batch: &'a mut LlamaBatch,
+    model: &'a LlamaModel,
+    max_unconfirmed_tokens: usize
+}
+
+impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
+    fn new(n_task: u32, batch: &'a mut LlamaBatch, model: &'a LlamaModel) -> Self {
+        let mut sequence_list = Vec::with_capacity(n_task as usize);
+
+        for _ in 0..n_task {
+            sequence_list.push(None);
+        }
+
+        Self {
+            sequence_list,
+            batch,
+            model,
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.sequence_list.iter()
+            .filter(|v| v.is_some())
+            .count()
+    }
+
+    fn put(&mut self, seq: SpeculativeCompletionsDraftSequence) -> Result<()> {
+        for slot in self.sequence_list.iter_mut() {
+            if slot.is_some() {
+                continue;
+            }
+
+            *slot = Some(seq);
+            return Ok(());
+        }
+        Err(anyhow!("No available slot"))
+    }
+
+    fn poll(&mut self, ctx: &mut LlamaContext) -> Result<()> {
+        for (seq_id, seq_op) in self.sequence_list.iter_mut().enumerate() {
+            if let Some(seq) = seq_op {
+                match seq.state {
+                    DraftSequenceState::Decode => {
+                        if seq.unconfirmed_tokens.len() >= self.max_unconfirmed_tokens {
+                            seq.state = DraftSequenceState::WaitConfirm;
+                            let target_input = SpeculativeCompletionsTargetInput::DraftInput {
+                                draft_token_list: seq.unconfirmed_tokens.clone()
+                            };
+                            seq.target_channel.send(target_input)?;
+                            continue;
+                        }
+
+                        if seq.unconfirmed_tokens.is_empty() && seq.confirmed_tokens.is_empty() {
+                            seq.confirmed_tokens.extend_from_slice(&seq.prompt_tokens);
+                        }
+
+                        let enter_token = if seq.unconfirmed_tokens.is_empty() {
+                            *seq.confirmed_tokens.last().unwrap()
+                        } else {
+                            *seq.unconfirmed_tokens.last().unwrap()
+                        };
+                        self.batch.add(seq.last_token, seq.token_pos as i32, &[seq_id as i32], true)?;
+                        seq.token_pos += 1;
+                    }
+                    DraftSequenceState::WaitConfirm => {
+                        let out = match seq.callback_channel.try_recv() {
+                            Ok(out) => out,
+                            Err(_) => continue,
+                        };
+                        let callback_tokens = out.output_token_list;
+                        let mut eq_count = 0usize;
+                        for (target_token, draft_token) in callback_tokens.into_iter().zip(&seq.unconfirmed_tokens) {
+                            if target_token != *draft_token {
+                                break;
+                            }
+                            eq_count += 1;
+                        }
+
+                        let mut skip = false;
+                        for out in &seq.unconfirmed_tokens[..eq_count] {
+                            if self.model.is_eog_token(*out) {
+                                *seq_op = None;
+                                ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None)?;
+                                skip = true;
+                                break;
+                            }
+
+                            let _res = seq.api_channel.send(*out);
+                        }
+
+                        if skip {
+                            continue;
+                        }
+
+                        if eq_count != 0 {
+                            seq.last_token = seq.unconfirmed_tokens[eq_count - 1];
+                        }
+
+                        seq.token_pos += eq_count as u32;
+
+                        ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.token_pos - 1), None)?;
+
+                        if eq_count == seq.unconfirmed_tokens.len() {
+                            seq.state = DraftSequenceState::Decode;
+                            self.batch.add(seq.last_token, seq.token_pos as i32 - 1, &[seq_id as i32], true)?;
+                        } else {
+                            seq.state = DraftSequenceState::WaitTargetDecode;
+
+                            let input = SpeculativeCompletionsTargetInput {
+                                pos_start: seq.token_pos - 1,
+                                input_token_list: vec![seq.last_token]
+                            };
+
+                            seq.target_channel.send(input)?;
+                        }
+                        seq.unconfirmed_tokens.clear();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn speculative_completions_draft_handler(
+    model: &LlamaModel,
+    backend: &LlamaBackend,
+    target_task_tx: &flume::Sender<SpeculativeCompletionsTargetTask>,
+    task_rx: &flume::Receiver<CompletionsTask>,
+    n_tasks: u32,
+    kv_cache_size_pre_task: u32,
+) -> Result<()> {
+    let ctx_params = LlamaContextParams::default()
+        .with_offload_kqv(true)
+        .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
+        .with_n_batch(n_tasks * kv_cache_size_pre_task);
+
+    let mut ctx = model.new_context(backend, ctx_params)?;
+    let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
+
 }
 
 pub async fn run(
