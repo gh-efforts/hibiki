@@ -47,10 +47,14 @@ async fn completion_req_to_task(
         );
 
         let task = CompletionsTask {
-            callback,
+            from_api: callback,
             maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
-            sampler,
+            frequency_penalty : req.frequency_penalty,
+            presence_penalty:  req.presence_penalty,
+            seed: req.seed,
+            temperature: req.temperature,
+            top_p: req.top_p
         };
         Result::<_, anyhow::Error>::Ok(task)
     }).await?
@@ -135,11 +139,15 @@ async fn chat_completion_req_to_task(
         );
 
         let task = CompletionsTask {
-            callback,
+            from_api: callback,
             #[allow(deprecated)]
             maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
-            sampler,
+            frequency_penalty : req.frequency_penalty,
+            presence_penalty:  req.presence_penalty,
+            seed: req.seed,
+            temperature: req.temperature,
+            top_p: req.top_p
         };
         Result::<_, anyhow::Error>::Ok(task)
     }).await?

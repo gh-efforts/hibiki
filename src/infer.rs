@@ -16,6 +16,7 @@ use std::ptr::eq;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Duration;
 
 struct Sequence {
@@ -155,8 +156,15 @@ fn completions_handler(
             };
 
             let sequence = Sequence {
-                sampler: task.sampler,
-                callback: task.callback,
+                sampler: Sampler::new(
+                    model,
+                    task.frequency_penalty,
+                    task.presence_penalty,
+                    task.seed,
+                    task.temperature,
+                    task.top_p
+                ),
+                callback: task.from_api,
                 token_pos: task.input_token_list.len() as u32,
                 maximum_tokens: min(
                     task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
@@ -172,8 +180,15 @@ fn completions_handler(
             match task_rx.try_recv() {
                 Ok(task) => {
                     let sequence = Sequence {
-                        sampler: task.sampler,
-                        callback: task.callback,
+                        sampler: Sampler::new(
+                            model,
+                            task.frequency_penalty,
+                            task.presence_penalty,
+                            task.seed,
+                            task.temperature,
+                            task.top_p
+                        ),
+                        callback: task.from_api,
                         token_pos: task.input_token_list.len() as u32,
                         maximum_tokens: min(
                             task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
@@ -213,7 +228,7 @@ struct SpeculativeCompletionsTargetOutput {
 struct SpeculativeCompletionsTargetTask {
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
-    seed: Option<i64>,
+    seed: i64,
     temperature: Option<f32>,
     top_p: Option<f32>,
     input_channel: flume::Receiver<SpeculativeCompletionsTargetInput>,
@@ -315,6 +330,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                 if seq.accepted_token_list.len() == 0 {
                                     self.batch.add_sequence(&seq.prompt_token_list, id as i32, false)?;
                                     sampler_mapping.entry(seq.prompt_token_list.len() as u32 - 1).or_insert_with(Vec::new).push(id as u32);
+                                    seq.accepted_token_list.extend_from_slice(&seq.prompt_token_list);
                                 } else {
                                     let mut tokens = Vec::with_capacity(draft_token_list.len());
                                     tokens.push(seq.accepted_token_list.last().unwrap().clone());
@@ -346,47 +362,41 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
 
         // seq_id -> tokens
         let mut out_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
-
+        // seq_id -> next_token
+        let mut next_mapping: BTreeMap<u32, LlamaToken> = BTreeMap::new();
         for (pos, seq_ids) in sampler_mapping {
             for seq_id in seq_ids {
+                if next_mapping.get(&seq_id).is_some() {
+                    continue;
+                }
+
                 let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
                 let token = seq.sampler.sample(ctx, pos as i32);
-                seq.sampler.accept(token);
+                let is_eog_token = self.model.is_eog_token(token);
+                let draft_tokens = draft_mapping.get(&seq_id).unwrap();
 
-                out_mapping.entry(seq_id).or_insert_with(Vec::new).push(token);
+                let draft_idx = pos as usize - seq.accepted_token_list.len();
+
+                if !is_eog_token {
+                    seq.sampler.accept(token);
+                }
+
+                if draft_idx < draft_tokens.len() && token != draft_tokens[draft_idx] {
+                    next_mapping.insert(seq_id, token);
+                } else {
+                    out_mapping.entry(seq_id).or_insert_with(Vec::new).push(token);
+                }
             }
         }
 
         for (seq_id, out_tokens) in out_mapping {
             let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
-
-            let draft_tokens = draft_mapping.get(&seq_id).unwrap();
-            let mut accept_n = 0;
-            for i in 0..out_tokens.len() {
-                if out_tokens[i] != draft_tokens[i] {
-                    break;
-                }
-                accept_n += 1;
-            }
-
-            if seq.accepted_token_list.is_empty() {
-                seq.accepted_token_list.extend_from_slice(&seq.prompt_token_list);
-                seq.accepted_token_list.extend_from_slice(&out_tokens[..accept_n]);
-            } else {
-                seq.accepted_token_list.extend_from_slice(&out_tokens[..accept_n]);
-            }
-
-            let next_token = if accept_n == out_tokens.len() {
-                None
-            } else {
-                let next_token = out_tokens[accept_n];
-                seq.accepted_token_list.push(next_token);
-                Some(next_token)
-            };
+            seq.accepted_token_list.extend_from_slice(&out_tokens);
+            let next = next_mapping.get(&seq_id).cloned();
 
             let out = SpeculativeCompletionsTargetOutput {
-                accept_token_n: accept_n as u32,
-                next_token
+                accept_token_n: out_tokens.len() as u32,
+                next_token: next.filter(|t| !ctx.model.is_eog_token(*t))
             };
 
             let _ = seq.output_channel.send(out);
@@ -428,7 +438,7 @@ fn speculative_completions_target_handler(
                             model,
                             task.frequency_penalty,
                             task.presence_penalty,
-                            task.seed,
+                            Some(task.seed),
                             task.temperature,
                             task.top_p
                         ),
@@ -440,8 +450,8 @@ fn speculative_completions_target_handler(
 
                     slots.put(sequence)?;
                 }
-                Err(flume::TryRecvError::Empty) => break,
-                Err(flume::TryRecvError::Disconnected) => {
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
                     return Err(anyhow!("Task channel disconnected"));
                 }
             }
@@ -482,7 +492,7 @@ fn speculative_completions_target_handler(
                     model,
                     task.frequency_penalty,
                     task.presence_penalty,
-                    task.seed,
+                    Some(task.seed),
                     task.temperature,
                     task.top_p
                 ),
@@ -510,9 +520,38 @@ struct SpeculativeCompletionsDraftSequence {
     unconfirmed_tokens: Vec<LlamaToken>,
     sampler: Sampler,
     api_channel: flume::Sender<LlamaToken>,
-    target_channel: flume::Sender<SpeculativeCompletionsTargetInput>,
-    callback_channel: flume::Receiver<SpeculativeCompletionsTargetOutput>,
+    to_target_channel: flume::Sender<SpeculativeCompletionsTargetInput>,
+    from_target_channel: flume::Receiver<SpeculativeCompletionsTargetOutput>,
     maximum_tokens: u32,
+}
+
+impl SpeculativeCompletionsDraftSequence {
+    fn new(
+        task: CompletionsTask,
+        model: &LlamaModel,
+        send_to_target: flume::Sender<SpeculativeCompletionsTargetInput>,
+        from_target:  flume::Receiver<SpeculativeCompletionsTargetOutput>,
+    ) -> Self {
+        let sequence = SpeculativeCompletionsDraftSequence {
+            state: DraftSequenceState::Decode,
+            prompt_tokens: task.input_token_list,
+            confirmed_tokens: Vec::new(),
+            unconfirmed_tokens: Vec::new(),
+            sampler: Sampler::new(
+                model,
+                task.frequency_penalty,
+                task.presence_penalty,
+                task.seed,
+                task.temperature,
+                task.top_p
+            ),
+            api_channel: task.from_api,
+            to_target_channel: send_to_target,
+            from_target_channel: from_target,
+            maximum_tokens: task.maximum_tokens.unwrap()
+        };
+        sequence
+    }
 }
 
 struct SpeculativeCompletionsDraftSequenceSlots<'a> {
@@ -534,6 +573,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
             sequence_list,
             batch,
             model,
+            max_unconfirmed_tokens: 16
         }
     }
 
@@ -555,96 +595,127 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
         Err(anyhow!("No available slot"))
     }
 
-    fn poll(&mut self, ctx: &mut LlamaContext) -> Result<()> {
-        for (seq_id, seq_op) in self.sequence_list.iter_mut().enumerate() {
-            if let Some(seq) = seq_op {
-                match seq.state {
-                    DraftSequenceState::Decode => {
-                        if seq.unconfirmed_tokens.len() >= self.max_unconfirmed_tokens {
-                            seq.state = DraftSequenceState::WaitConfirm;
-                            let target_input = SpeculativeCompletionsTargetInput::DraftInput {
-                                draft_token_list: seq.unconfirmed_tokens.clone()
+    // (seq_id, task_input)
+    fn poll(&mut self, ctx: &mut LlamaContext, mut select_task: Option<(u32, SpeculativeCompletionsTargetOutput)>) -> Result<Poll<()>> {
+        let mut decode_seq_list = Vec::new();
+        let mut need_loop = true;
+
+        while need_loop {
+            need_loop = false;
+            for (seq_id, seq_op) in self.sequence_list.iter_mut().enumerate() {
+                if let Some(seq) = seq_op {
+                    match seq.state {
+                        DraftSequenceState::Decode => {
+                            if decode_seq_list.contains(&seq_id) {
+                                continue;
+                            }
+
+                            if seq.unconfirmed_tokens.is_empty() && seq.confirmed_tokens.is_empty() {
+                                seq.confirmed_tokens.extend_from_slice(&seq.prompt_tokens);
+
+                                let input = SpeculativeCompletionsTargetInput::PromptInput {
+                                    token_list: seq.prompt_tokens.clone()
+                                };
+
+                                seq.to_target_channel.send(input)?;
+
+                                for i in 0..seq.confirmed_tokens.len() - 1 {
+                                    self.batch.add(seq.confirmed_tokens[i], i as i32, &[seq_id as i32], false)?
+                                }
+                            }
+
+                            if seq.unconfirmed_tokens.len() >= self.max_unconfirmed_tokens ||
+                                seq.confirmed_tokens.len() + seq.unconfirmed_tokens.len() >= seq.maximum_tokens as usize {
+                                seq.state = DraftSequenceState::WaitConfirm;
+                                let target_input = SpeculativeCompletionsTargetInput::DraftInput {
+                                    draft_token_list: seq.unconfirmed_tokens.clone()
+                                };
+                                seq.to_target_channel.send(target_input)?;
+                                continue;
+                            }
+
+                            let (enter_token, pos) = if seq.unconfirmed_tokens.is_empty() {
+                                (*seq.confirmed_tokens.last().unwrap(), seq.confirmed_tokens.len() - 1)
+                            } else {
+                                (*seq.unconfirmed_tokens.last().unwrap(), seq.confirmed_tokens.len() + seq.unconfirmed_tokens.len() - 1)
                             };
-                            seq.target_channel.send(target_input)?;
-                            continue;
-                        }
 
-                        if seq.unconfirmed_tokens.is_empty() && seq.confirmed_tokens.is_empty() {
-                            seq.confirmed_tokens.extend_from_slice(&seq.prompt_tokens);
+                            self.batch.add(enter_token, pos as i32, &[seq_id as i32], true)?;
+                            decode_seq_list.push(seq_id);
+                            need_loop = true;
                         }
+                        DraftSequenceState::WaitConfirm => {
+                            let select_task_id_eq = select_task.as_ref().map(|(id, _)| seq_id as u32 == *id).unwrap_or(false);
 
-                        let enter_token = if seq.unconfirmed_tokens.is_empty() {
-                            *seq.confirmed_tokens.last().unwrap()
-                        } else {
-                            *seq.unconfirmed_tokens.last().unwrap()
-                        };
-                        self.batch.add(seq.last_token, seq.token_pos as i32, &[seq_id as i32], true)?;
-                        seq.token_pos += 1;
-                    }
-                    DraftSequenceState::WaitConfirm => {
-                        let out = match seq.callback_channel.try_recv() {
-                            Ok(out) => out,
-                            Err(_) => continue,
-                        };
-                        let callback_tokens = out.output_token_list;
-                        let mut eq_count = 0usize;
-                        for (target_token, draft_token) in callback_tokens.into_iter().zip(&seq.unconfirmed_tokens) {
-                            if target_token != *draft_token {
-                                break;
-                            }
-                            eq_count += 1;
-                        }
+                            let out = if select_task_id_eq {
+                                select_task.take().map(|(_, task)| task).unwrap()
+                            } else {
+                                let out = match seq.from_target_channel.try_recv() {
+                                    Ok(out) => out,
+                                    Err(_) => continue,
+                                };
+                                out
+                            };
 
-                        let mut skip = false;
-                        for out in &seq.unconfirmed_tokens[..eq_count] {
-                            if self.model.is_eog_token(*out) {
-                                *seq_op = None;
-                                ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None)?;
-                                skip = true;
-                                break;
+                            let old_pos = seq.confirmed_tokens.len() - 1;
+                            let update_to_confirm = &seq.unconfirmed_tokens[..out.accept_token_n as usize];
+
+                            seq.confirmed_tokens.extend_from_slice(update_to_confirm);
+                            if let Some(next_token) = out.next_token {
+                                seq.confirmed_tokens.push(next_token);
                             }
 
-                            let _res = seq.api_channel.send(*out);
-                        }
+                            if out.accept_token_n as usize != seq.unconfirmed_tokens.len() {
+                                seq.sampler.reset();
+                                for token in seq.confirmed_tokens.iter() {
+                                    seq.sampler.accept(*token);
+                                }
 
-                        if skip {
-                            continue;
-                        }
+                                ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.confirmed_tokens.len() as u32 - 1), None)?;
+                            }
 
-                        if eq_count != 0 {
-                            seq.last_token = seq.unconfirmed_tokens[eq_count - 1];
-                        }
+                            for pos in old_pos + 1..seq.confirmed_tokens.len() {
+                                let _ = seq.api_channel.send(seq.confirmed_tokens[pos]);
+                            }
 
-                        seq.token_pos += eq_count as u32;
+                            if let Some(last_token) = seq.confirmed_tokens.last() {
+                                if self.model.is_eog_token(*last_token) {
+                                    *seq_op = None;
+                                    ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None)?;
+                                    continue;
+                                }
+                            }
 
-                        ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.token_pos - 1), None)?;
-
-                        if eq_count == seq.unconfirmed_tokens.len() {
                             seq.state = DraftSequenceState::Decode;
-                            self.batch.add(seq.last_token, seq.token_pos as i32 - 1, &[seq_id as i32], true)?;
-                        } else {
-                            seq.state = DraftSequenceState::WaitTargetDecode;
-
-                            let input = SpeculativeCompletionsTargetInput {
-                                pos_start: seq.token_pos - 1,
-                                input_token_list: vec![seq.last_token]
-                            };
-
-                            seq.target_channel.send(input)?;
+                            seq.unconfirmed_tokens.clear();
+                            need_loop = true;
                         }
-                        seq.unconfirmed_tokens.clear();
                     }
                 }
             }
         }
-        Ok(())
+
+        if !decode_seq_list.is_empty() {
+            ctx.decode(self.batch)?;
+            self.batch.clear();
+            
+            decode_seq_list.sort_unstable();
+            for seq_id in decode_seq_list {
+                let seq = self.sequence_list[seq_id].as_mut().unwrap();
+                let draft_token = seq.sampler.sample(ctx, -1);
+                seq.unconfirmed_tokens.push(draft_token);
+            }
+            Ok(Poll::Ready(()))
+        } else {
+            Ok(Poll::Pending)
+        }
     }
 }
 
 fn speculative_completions_draft_handler(
     model: &LlamaModel,
     backend: &LlamaBackend,
-    target_task_tx: &flume::Sender<SpeculativeCompletionsTargetTask>,
+    to_target_handler: &flume::Sender<SpeculativeCompletionsTargetTask>,
     task_rx: &flume::Receiver<CompletionsTask>,
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
@@ -657,8 +728,115 @@ fn speculative_completions_draft_handler(
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
 
+    let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
+
+    let select_task = RefCell::new(None);
+
+    loop {
+        while slots.len() < n_tasks as usize {
+            match task_rx.try_recv() {
+                Ok(mut task) => {
+                    let (to_target, from_draft) = flume::unbounded();
+                    let (to_draft, from_target) = flume::unbounded();
+                    task.seed = Some(task.seed.unwrap_or_else(|| rand::random()));
+                    task.maximum_tokens = {
+                        let out = min(
+                            task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
+                            kv_cache_size_pre_task
+                        );
+                        Some(out)
+                    };
+
+                    let target_task = SpeculativeCompletionsTargetTask {
+                        frequency_penalty: task.frequency_penalty,
+                        presence_penalty: task.presence_penalty,
+                        seed: task.seed.unwrap(),
+                        temperature: task.temperature,
+                        top_p: task.top_p,
+                        input_channel: from_draft,
+                        output_channel: to_draft
+                    };
+
+                    to_target_handler.send(target_task)?;
+
+                    let draft_seq = SpeculativeCompletionsDraftSequence::new(
+                        task,
+                        model,
+                        to_target,
+                        from_target
+                    );
+
+                    slots.put(draft_seq)?;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(anyhow!("Task channel disconnected"));
+                }
+            }
+        }
+
+        if slots.poll(&mut ctx, select_task.take())? == Poll::Pending {
+            let mut selector = flume::Selector::new();
+
+            for (seq_id, seq_op) in slots.sequence_list.iter().enumerate() {
+                if let Some(seq) = seq_op {
+                    selector = selector.recv(&seq.from_target_channel, {
+                        let select_task = &select_task;
+                        move |res| {
+                            *select_task.borrow_mut() = res.ok().map(|target_out| (seq_id as u32, target_out));
+                        }
+                    })
+                }
+            }
+
+            let mut completions_task = Rc::new(RefCell::new(None));
+
+            if slots.len() < n_tasks as usize {
+                selector = selector.recv(&task_rx, {
+                    let completions_task = completions_task.clone();
+                    move |task_res| *completions_task.borrow_mut() = task_res.ok()
+                });
+            }
+            selector.wait();
+
+            if let Some(mut completions_task) = completions_task.take() {
+                let (to_target, from_draft) = flume::unbounded();
+                let (to_draft, from_target) = flume::unbounded();
+                completions_task.seed = Some(completions_task.seed.unwrap_or_else(|| rand::random()));
+                completions_task.maximum_tokens = {
+                    let out = min(
+                        completions_task.maximum_tokens.map(|n_tokens| n_tokens + completions_task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
+                        kv_cache_size_pre_task
+                    );
+                    Some(out)
+                };
+
+                let target_task = SpeculativeCompletionsTargetTask {
+                    frequency_penalty: completions_task.frequency_penalty,
+                    presence_penalty: completions_task.presence_penalty,
+                    seed: completions_task.seed.unwrap(),
+                    temperature: completions_task.temperature,
+                    top_p: completions_task.top_p,
+                    input_channel: from_draft,
+                    output_channel: to_draft
+                };
+
+                to_target_handler.send(target_task)?;
+
+                let draft_seq = SpeculativeCompletionsDraftSequence::new(
+                    completions_task,
+                    model,
+                    to_target,
+                    from_target
+                );
+
+                slots.put(draft_seq)?;
+            }
+        }
+    }
 }
 
+// todo check target and draft model compatible
 pub async fn run(
     model: Arc<LlamaModel>,
     backend: Arc<LlamaBackend>,

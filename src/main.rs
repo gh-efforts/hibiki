@@ -25,9 +25,13 @@ mod sampler;
 mod metadata;
 
 struct CompletionsTask {
-    callback: flume::Sender<LlamaToken>,
+    from_api: flume::Sender<LlamaToken>,
     input_token_list: Vec<LlamaToken>,
-    sampler: Sampler,
+    frequency_penalty: Option<f32>,
+    presence_penalty: Option<f32>,
+    seed: Option<i64>,
+    temperature: Option<f32>,
+    top_p: Option<f32>,
     maximum_tokens: Option<u32>
 }
 

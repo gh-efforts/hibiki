@@ -59,6 +59,12 @@ impl Sampler {
             llama_cpp_sys_2::hibiki_common_sampler_accept(self.inner, token.0, false);
         }
     }
+
+    pub fn reset(&mut self) {
+        unsafe {
+            llama_cpp_sys_2::hibiki_common_sampler_reset(self.inner);
+        }
+    }
 }
 
 impl Drop for Sampler {
