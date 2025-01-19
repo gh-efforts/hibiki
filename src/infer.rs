@@ -331,6 +331,13 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     self.batch.add_sequence(&seq.prompt_token_list, id as i32, false)?;
                                     sampler_mapping.entry(seq.prompt_token_list.len() as u32 - 1).or_insert_with(Vec::new).push(id as u32);
                                     seq.accepted_token_list.extend_from_slice(&seq.prompt_token_list);
+
+                                    let mut idx = 0;
+                                    for pos in seq.accepted_token_list.len()..seq.accepted_token_list.len() + draft_token_list.len() - 1 {
+                                        self.batch.add(draft_token_list[idx], pos as i32, &[id as i32], true)?;
+                                        sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
+                                        idx += 1;
+                                    }
                                 } else {
                                     let mut tokens = Vec::with_capacity(draft_token_list.len());
                                     tokens.push(seq.accepted_token_list.last().unwrap().clone());
@@ -375,7 +382,8 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                 let is_eog_token = self.model.is_eog_token(token);
                 let draft_tokens = draft_mapping.get(&seq_id).unwrap();
 
-                let draft_idx = pos as usize - seq.accepted_token_list.len();
+                // todo
+                let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
 
                 if !is_eog_token {
                     seq.sampler.accept(token);
