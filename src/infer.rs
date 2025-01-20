@@ -6,7 +6,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::{LlamaModel, Special};
+use llama_cpp_2::model::{LlamaModel};
 use llama_cpp_2::token::LlamaToken;
 use llama_cpp_sys_2::hibiki_common_speculative_are_compatible;
 use std::cell::RefCell;

@@ -10,8 +10,6 @@ use chrono::Utc;
 use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
 use llama_cpp_2::token::LlamaToken;
 use std::net::SocketAddr;
-use std::str::FromStr;
-use std::string::FromUtf8Error;
 use std::sync::Arc;
 use std::time::Duration;
 use axum::http::StatusCode;
@@ -294,9 +292,19 @@ async fn v1_completions(
         send_to_backend(task, &*ctx).await?;
 
         let resp = if is_stream {
+            let mut single_token_bytes = Vec::new();
+
             let out_stream = rx.into_stream()
                 .map(move |token| {
-                    let text = ctx.model.token_to_str(token, Special::Plaintext)?;
+                    let token_bytes = ctx.model.token_to_bytes(token, Special::Plaintext)?;
+                    single_token_bytes.extend_from_slice(&token_bytes);
+
+                    let text = match String::from_utf8(single_token_bytes.clone()) {
+                        Ok(v) => v,
+                        Err(_) => return Ok(None)
+                    };
+
+                    single_token_bytes.clear();
 
                     let completion_resp = async_openai::types::CreateCompletionResponse {
                         id: completion_id.clone(),
@@ -316,7 +324,10 @@ async fn v1_completions(
                     let event = axum::response::sse::Event::default()
                         .json_data(&completion_resp)?;
 
-                    Result::<_, anyhow::Error>::Ok(event)
+                    Result::<_, anyhow::Error>::Ok(Some(event))
+                })
+                .filter_map(|v| async {
+                    v.transpose()
                 })
                 .chain(futures_util::stream::once(async {
                     let event = axum::response::sse::Event::default()
