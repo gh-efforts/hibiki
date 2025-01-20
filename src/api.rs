@@ -252,6 +252,8 @@ async fn v1_chat_completions(
     match fut.await {
         Ok(resp) => resp,
         Err(e) => {
+            error!("v1_caht_completions error: {:?}", e);
+
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from(e.to_string()))
@@ -346,6 +348,8 @@ async fn v1_completions(
     match fut.await {
         Ok(resp) => resp,
         Err(e) => {
+            error!("v1_completions error: {:?}", e);
+
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
                 .body(Body::from(e.to_string()))

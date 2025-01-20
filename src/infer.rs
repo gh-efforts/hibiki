@@ -303,6 +303,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
     }
 
     // (seq_id, task_input)
+    // todo clear old kv cache
     fn poll(&mut self, ctx: &mut LlamaContext, mut select_task: Option<(u32, SpeculativeCompletionsTargetInput)>) -> Result<u32> {
         // token_pos -> seq_ids
         let mut sampler_mapping: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
@@ -401,6 +402,10 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
             seq.accepted_token_list.extend_from_slice(&out_tokens);
             let next = next_mapping.get(&seq_id).cloned();
+
+            if let Some(next) = next {
+                seq.accepted_token_list.push(next);
+            }
 
             let out = SpeculativeCompletionsTargetOutput {
                 accept_token_n: out_tokens.len() as u32,
@@ -682,21 +687,31 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.confirmed_tokens.len() as u32 - 1), None)?;
                             }
 
+                            let mut remove_seq = false;
                             for pos in old_pos + 1..seq.confirmed_tokens.len() {
-                                let _ = seq.api_channel.send(seq.confirmed_tokens[pos]);
-                            }
+                                let out_token = seq.confirmed_tokens[pos];
 
-                            if let Some(last_token) = seq.confirmed_tokens.last() {
-                                if self.model.is_eog_token(*last_token) {
-                                    *seq_op = None;
-                                    ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None)?;
-                                    continue;
+                                if self.model.is_eog_token(out_token) {
+                                    remove_seq = true;
+                                    break;
+                                }
+
+                                let _ = seq.api_channel.send(out_token);
+
+                                if pos + 1 >= seq.maximum_tokens as usize {
+                                    remove_seq = true;
+                                    break;
                                 }
                             }
 
-                            seq.state = DraftSequenceState::Decode;
-                            seq.unconfirmed_tokens.clear();
-                            need_loop = true;
+                            if remove_seq {
+                                *seq_op = None;
+                                ctx.clear_kv_cache_seq(Some(seq_id as u32), None, None)?;
+                            } else {
+                                seq.state = DraftSequenceState::Decode;
+                                seq.unconfirmed_tokens.clear();
+                                need_loop = true;
+                            }
                         }
                     }
                 }
