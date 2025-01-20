@@ -380,6 +380,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                 }
 
                 let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
+                debug!("target sample");
                 let token = seq.sampler.sample(ctx, pos as i32);
                 let is_eog_token = self.model.is_eog_token(token);
                 let draft_tokens = draft_mapping.get(&seq_id).unwrap();
@@ -725,6 +726,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
             decode_seq_list.sort_unstable();
             for seq_id in decode_seq_list {
                 let seq = self.sequence_list[seq_id].as_mut().unwrap();
+                debug!("draft sample");
                 let draft_token = seq.sampler.sample(ctx, -1);
                 seq.unconfirmed_tokens.push(draft_token);
             }
