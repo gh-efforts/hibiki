@@ -345,6 +345,8 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     tokens.push(seq.accepted_token_list.last().unwrap().clone());
                                     tokens.extend_from_slice(&draft_token_list[..draft_token_list.len() - 1]);
 
+                                    ctx.clear_kv_cache_seq(Some(id as u32), Some(seq.accepted_token_list.len() as u32 - 1), None)?;
+
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
                                         self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
