@@ -392,7 +392,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             let draft_tokens = draft_mapping.get(&seq_id).unwrap();
 
             let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
-
+            debug!("draft idx {}", draft_idx);
             if !is_eog_token {
                 seq.sampler.accept(token);
             }
