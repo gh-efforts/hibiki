@@ -702,10 +702,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                     break;
                                 }
 
-                                if log::max_level() >= log::Level::Debug {
-                                    let token_str = self.model.token_to_str(out_token, Special::Plaintext)?;
-                                    debug!("send token ({})", token_str);
-                                }
                                 let _ = seq.api_channel.send(out_token);
 
                                 if pos + 1 >= seq.maximum_tokens as usize {

@@ -153,7 +153,8 @@ async fn v1_chat_completions(
         let resp = if is_stream {
             let out_stream = rx.into_stream()
                 .map(move |token| {
-                    let text = ctx.model.token_to_str(token, Special::Plaintext)?;
+                    let token_bytes = ctx.model.token_to_bytes(token, Special::Plaintext)?;
+                    let text = unsafe {String::from_utf8_unchecked(token_bytes)};
                     debug!("v1_chat_completions, gen token: {}", text);
 
                     let chat_completion_resp = async_openai::types::CreateChatCompletionStreamResponse {
