@@ -303,7 +303,6 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
     }
 
     // (seq_id, task_input)
-    // todo clear old kv cache
     fn poll(&mut self, ctx: &mut LlamaContext, mut select_task: Option<(u32, SpeculativeCompletionsTargetInput)>) -> Result<u32> {
         // token_pos -> seq_ids
         let mut sampler_mapping: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
@@ -336,7 +335,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len()..seq.accepted_token_list.len() + draft_token_list.len() - 1 {
                                         self.batch.add(draft_token_list[idx], pos as i32, &[id as i32], true)?;
-                                        debug!("init batch add pos {}", pos);
+                                        debug!("init batch add pos {}, seq {}", pos, id);
                                         sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
                                         idx += 1;
                                     }
@@ -350,7 +349,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
                                         self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
-                                        debug!("batch add pos {}", pos);
+                                        debug!("batch add pos {}, seq {}", pos, id);
                                         sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
                                         idx += 1;
                                     }
