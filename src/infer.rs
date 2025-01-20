@@ -336,6 +336,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len()..seq.accepted_token_list.len() + draft_token_list.len() - 1 {
                                         self.batch.add(draft_token_list[idx], pos as i32, &[id as i32], true)?;
+                                        debug!("init batch add pos {}", pos);
                                         sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
                                         idx += 1;
                                     }
