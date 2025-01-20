@@ -6,7 +6,7 @@ use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::model::{LlamaModel, Special};
 use llama_cpp_2::token::LlamaToken;
 use llama_cpp_sys_2::hibiki_common_speculative_are_compatible;
 use std::cell::RefCell;
@@ -337,7 +337,6 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len()..seq.accepted_token_list.len() + draft_token_list.len() - 1 {
                                         self.batch.add(draft_token_list[idx], pos as i32, &[id as i32], true)?;
-                                        debug!("init batch add pos {}, seq {}", pos, id);
                                         sample_list.push((pos as u32, pos as u32, id as u32));
                                         idx += 1;
                                     }
@@ -351,7 +350,6 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
                                         self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
-                                        debug!("batch add pos {}, seq {}", pos, id);
                                         sample_list.push((idx as u32, pos as u32, id as u32));
                                         idx += 1;
                                     }
@@ -391,12 +389,10 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
             debug!("target sample");
             let token = seq.sampler.sample(ctx, i as i32);
-            debug!("after target sample");
             let is_eog_token = self.model.is_eog_token(token);
             let draft_tokens = draft_mapping.get(&seq_id).unwrap();
 
             let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
-            debug!("draft idx {}", draft_idx);
             if !is_eog_token {
                 seq.sampler.accept(token);
             }
@@ -706,6 +702,10 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                     break;
                                 }
 
+                                if log::max_level() >= log::Level::Debug {
+                                    let token_str = self.model.token_to_str(out_token, Special::Plaintext)?;
+                                    debug!("send token ({})", token_str);
+                                }
                                 let _ = seq.api_channel.send(out_token);
 
                                 if pos + 1 >= seq.maximum_tokens as usize {
