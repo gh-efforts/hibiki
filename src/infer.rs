@@ -378,7 +378,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
         let mut out_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
         // seq_id -> next_token
         let mut next_mapping: BTreeMap<u32, LlamaToken> = BTreeMap::new();
-        for (pos, seq_id) in sample_list {
+        for (i, (pos, seq_id)) in sample_list.into_iter().enumerate() {
             if out_mapping.get(&seq_id).is_none() {
                 out_mapping.insert(seq_id, Vec::new());
             }
@@ -390,7 +390,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
 
             let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
             debug!("target sample");
-            let token = seq.sampler.sample(ctx, -1);
+            let token = seq.sampler.sample(ctx, i as i32);
             debug!("after target sample");
             let is_eog_token = self.model.is_eog_token(token);
             let draft_tokens = draft_mapping.get(&seq_id).unwrap();
