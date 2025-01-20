@@ -306,8 +306,8 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
     fn poll(&mut self, ctx: &mut LlamaContext, mut select_task: Option<(u32, SpeculativeCompletionsTargetInput)>) -> Result<u32> {
         // token_pos -> seq_ids
         // let mut sampler_mapping: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-        // (pos, seq_id)
-        let mut sample_list: Vec<(u32, u32)> = Vec::new();
+        // (idx, pos, seq_id)
+        let mut sample_list: Vec<(u32, u32, u32)> = Vec::new();
         // seq_id -> draft_token_list
         let mut draft_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
         let mut decode_n: u32 = 0;
@@ -331,14 +331,14 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                             SpeculativeCompletionsTargetInput::DraftInput { draft_token_list } => {
                                 if seq.accepted_token_list.len() == 0 {
                                     self.batch.add_sequence(&seq.prompt_token_list, id as i32, false)?;
-                                    sample_list.push((seq.prompt_token_list.len() as u32 - 1, id as u32));
+                                    sample_list.push((seq.prompt_token_list.len() as u32 - 1, seq.prompt_token_list.len() as u32 - 1, id as u32));
                                     seq.accepted_token_list.extend_from_slice(&seq.prompt_token_list);
 
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len()..seq.accepted_token_list.len() + draft_token_list.len() - 1 {
                                         self.batch.add(draft_token_list[idx], pos as i32, &[id as i32], true)?;
                                         debug!("init batch add pos {}, seq {}", pos, id);
-                                        sample_list.push((pos as u32, id as u32));
+                                        sample_list.push((pos as u32, pos as u32, id as u32));
                                         idx += 1;
                                     }
                                 } else {
@@ -352,7 +352,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
                                         self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
                                         debug!("batch add pos {}, seq {}", pos, id);
-                                        sample_list.push((pos as u32, id as u32));
+                                        sample_list.push((idx as u32, pos as u32, id as u32));
                                         idx += 1;
                                     }
                                 }
@@ -378,7 +378,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
         let mut out_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
         // seq_id -> next_token
         let mut next_mapping: BTreeMap<u32, LlamaToken> = BTreeMap::new();
-        for (i, (pos, seq_id)) in sample_list.into_iter().enumerate() {
+        for (i, pos, seq_id) in sample_list {
             if out_mapping.get(&seq_id).is_none() {
                 out_mapping.insert(seq_id, Vec::new());
             }
