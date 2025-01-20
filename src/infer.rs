@@ -8,11 +8,11 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::token::LlamaToken;
+use llama_cpp_sys_2::hibiki_common_speculative_are_compatible;
 use std::cell::RefCell;
 use std::cmp::min;
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
-use std::ptr::eq;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -346,6 +346,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
                                         self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
+                                        sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
                                         idx += 1;
                                     }
                                 }
@@ -382,7 +383,6 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                 let is_eog_token = self.model.is_eog_token(token);
                 let draft_tokens = draft_mapping.get(&seq_id).unwrap();
 
-                // todo
                 let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
 
                 if !is_eog_token {
@@ -404,7 +404,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
 
             let out = SpeculativeCompletionsTargetOutput {
                 accept_token_n: out_tokens.len() as u32,
-                next_token: next.filter(|t| !ctx.model.is_eog_token(*t))
+                next_token: next
             };
 
             let _ = seq.output_channel.send(out);
@@ -419,7 +419,7 @@ fn speculative_completions_target_handler(
     task_rx: &flume::Receiver<SpeculativeCompletionsTargetTask>,
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
-    is_cancel: &AtomicBool
+    _is_cancel: &AtomicBool
 ) -> Result<()> {
     let ctx_params = LlamaContextParams::default()
         .with_offload_kqv(true)
@@ -480,7 +480,7 @@ fn speculative_completions_target_handler(
             }
         }
 
-        let mut task = Rc::new(RefCell::new(None));
+        let task = Rc::new(RefCell::new(None));
 
         if slots.len() < n_tasks as usize {
             selector = selector.recv(&task_rx, {
@@ -797,7 +797,7 @@ fn speculative_completions_draft_handler(
                 }
             }
 
-            let mut completions_task = Rc::new(RefCell::new(None));
+            let completions_task = Rc::new(RefCell::new(None));
 
             if slots.len() < n_tasks as usize {
                 selector = selector.recv(&task_rx, {
@@ -844,9 +844,9 @@ fn speculative_completions_draft_handler(
     }
 }
 
-// todo check target and draft model compatible
 pub async fn run(
     model: Arc<LlamaModel>,
+    draft_model: Option<Arc<LlamaModel>>,
     backend: Arc<LlamaBackend>,
     task_rx: flume::Receiver<CompletionsTask>,
     kv_cache_size_pre_task: u32,
@@ -854,14 +854,66 @@ pub async fn run(
 ) -> Result<()> {
     let is_cancel = Arc::new(AtomicBool::new(false));
 
-    tokio::task::spawn_blocking(move || {
-        completions_handler(
-            &*model,
-            &*backend,
-            &task_rx,
-            n_tasks,
-            kv_cache_size_pre_task,
-            &*is_cancel
-        )
-    }).await?
+    match draft_model {
+        None => {
+            let model = model.clone();
+            let backend = backend.clone();
+
+            tokio::task::spawn_blocking(move || {
+                completions_handler(
+                    &*model,
+                    &*backend,
+                    &task_rx,
+                    n_tasks,
+                    kv_cache_size_pre_task,
+                    &*is_cancel
+                )
+            }).await?
+        }
+        Some(draft_model) => {
+            {
+                let ctx_params = LlamaContextParams::default();
+                let target_ctx = model.new_context(&*backend, ctx_params.clone())?;
+                let draft_ctx = draft_model.new_context(&*backend, ctx_params)?;
+                unsafe { ensure!(hibiki_common_speculative_are_compatible(target_ctx.context.as_ref(), draft_ctx.context.as_ref())) };
+            }
+
+            let (to_target_handler, from_draft_handler) = flume::unbounded();
+
+            let target_handle = tokio::task::spawn_blocking({
+                let model = model.clone();
+                let backend = backend.clone();
+                let is_cancel = Arc::new(AtomicBool::new(false));
+
+                move || {
+                    speculative_completions_target_handler(
+                        &*model,
+                        &*backend,
+                        &from_draft_handler,
+                        n_tasks,
+                        kv_cache_size_pre_task,
+                        &*is_cancel
+                    )
+                }
+            });
+
+            let draft_handle = tokio::task::spawn_blocking(move || {
+                speculative_completions_draft_handler(
+                    &*draft_model,
+                    &*backend,
+                    &to_target_handler,
+                    &task_rx,
+                    n_tasks,
+                    kv_cache_size_pre_task
+                )
+            });
+
+            let res = tokio::try_join!{
+                async {target_handle.await?},
+                async {draft_handle.await?}
+            };
+            res?;
+            Ok(())
+        }
+    }
 }

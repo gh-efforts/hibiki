@@ -1,22 +1,21 @@
 #[macro_use]
 extern crate log;
 
+use anyhow::Result;
+use clap::Parser;
+use llama_cpp_2::llama_backend;
+use llama_cpp_2::model::params::LlamaModelParams;
+use llama_cpp_2::model::LlamaModel;
+use llama_cpp_2::token::LlamaToken;
+use log::LevelFilter;
+use log4rs::append::console::ConsoleAppender;
+use log4rs::config::{Appender, Root};
+use log4rs::encode::pattern::PatternEncoder;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
-use clap::Parser;
-use llama_cpp_2::token::LlamaToken;
-use anyhow::Result;
-use llama_cpp_2::llama_backend;
-use llama_cpp_2::model::LlamaModel;
-use llama_cpp_2::model::params::LlamaModelParams;
-use log4rs::append::console::ConsoleAppender;
-use log4rs::config::{Appender, Root};
-use log4rs::encode::pattern::PatternEncoder;
-use log::LevelFilter;
-use crate::sampler::Sampler;
 
 mod api;
 mod infer;
@@ -43,6 +42,9 @@ struct Args {
 
     #[arg(short, long)]
     model_path: PathBuf,
+
+    #[arg(short, long)]
+    draft_model_path: Option<PathBuf>,
 
     #[arg(long)]
     model_name: String,
@@ -97,11 +99,19 @@ fn exec(args: Args) -> Result<()> {
     let model = LlamaModel::load_from_file(&backend, &args.model_path, &model_params)?;
     let model = Arc::new(model);
 
+    let draft_model = if let Some(draft_model_path) = args.draft_model_path {
+        let draft_model = LlamaModel::load_from_file(&backend, &draft_model_path, &model_params)?;
+        Some(Arc::new(draft_model))
+    } else {
+        None
+    };
+
     let (tx, rx) = flume::bounded(1024);
 
     rt.block_on(async {
         let infer_handle = infer::run(
             model.clone(),
+            draft_model,
             backend,
             rx,
             args.kv_cache_size_pre_task,

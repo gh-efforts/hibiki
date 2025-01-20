@@ -14,7 +14,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use axum::http::StatusCode;
 use futures_util::StreamExt;
-use crate::sampler::Sampler;
 
 struct Context {
     model: Arc<LlamaModel>,
@@ -36,15 +35,6 @@ async fn completion_req_to_task(
             }
             _ => return Err(anyhow!("Only string prompts are supported")),
         };
-
-        let sampler = Sampler::new(
-            &model,
-            req.frequency_penalty,
-            req.presence_penalty,
-            req.seed,
-            req.temperature,
-            req.top_p
-        );
 
         let task = CompletionsTask {
             from_api: callback,
@@ -128,15 +118,6 @@ async fn chat_completion_req_to_task(
 
         let prompt = model.apply_chat_template(template, chat_messages, true)?;
         let input_tokens = model.str_to_token(&prompt, AddBos::Always)?;
-
-        let sampler = Sampler::new(
-            &model,
-            req.frequency_penalty,
-            req.presence_penalty,
-            req.seed,
-            req.temperature,
-            req.top_p
-        );
 
         let task = CompletionsTask {
             from_api: callback,
