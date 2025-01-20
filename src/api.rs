@@ -164,6 +164,8 @@ async fn v1_chat_completions(
                         Ok(v) => v,
                         Err(_) => return Ok(None)
                     };
+
+                    single_token_bytes.clear();
                     debug!("v1_chat_completions, gen token: {}", text);
 
                     let chat_completion_resp = async_openai::types::CreateChatCompletionStreamResponse {
