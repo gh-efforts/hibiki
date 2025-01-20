@@ -305,7 +305,9 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
     // (seq_id, task_input)
     fn poll(&mut self, ctx: &mut LlamaContext, mut select_task: Option<(u32, SpeculativeCompletionsTargetInput)>) -> Result<u32> {
         // token_pos -> seq_ids
-        let mut sampler_mapping: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        // let mut sampler_mapping: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        // (pos, seq_id)
+        let mut sample_list: Vec<(u32, u32)> = Vec::new();
         // seq_id -> draft_token_list
         let mut draft_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
         let mut decode_n: u32 = 0;
@@ -329,14 +331,14 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                             SpeculativeCompletionsTargetInput::DraftInput { draft_token_list } => {
                                 if seq.accepted_token_list.len() == 0 {
                                     self.batch.add_sequence(&seq.prompt_token_list, id as i32, false)?;
-                                    sampler_mapping.entry(seq.prompt_token_list.len() as u32 - 1).or_insert_with(Vec::new).push(id as u32);
+                                    sample_list.push((seq.prompt_token_list.len() as u32 - 1, id as u32));
                                     seq.accepted_token_list.extend_from_slice(&seq.prompt_token_list);
 
                                     let mut idx = 0;
                                     for pos in seq.accepted_token_list.len()..seq.accepted_token_list.len() + draft_token_list.len() - 1 {
                                         self.batch.add(draft_token_list[idx], pos as i32, &[id as i32], true)?;
                                         debug!("init batch add pos {}, seq {}", pos, id);
-                                        sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
+                                        sample_list.push((pos as u32, id as u32));
                                         idx += 1;
                                     }
                                 } else {
@@ -350,7 +352,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                     for pos in seq.accepted_token_list.len() - 1..seq.accepted_token_list.len() - 1 + draft_token_list.len() {
                                         self.batch.add(tokens[idx], pos as i32, &[id as i32], true)?;
                                         debug!("batch add pos {}, seq {}", pos, id);
-                                        sampler_mapping.entry(pos as u32).or_insert_with(Vec::new).push(id as u32);
+                                        sample_list.push((pos as u32, id as u32));
                                         idx += 1;
                                     }
                                 }
@@ -376,29 +378,27 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
         let mut out_mapping: BTreeMap<u32, Vec<LlamaToken>> = BTreeMap::new();
         // seq_id -> next_token
         let mut next_mapping: BTreeMap<u32, LlamaToken> = BTreeMap::new();
-        for (pos, seq_ids) in sampler_mapping {
-            for seq_id in seq_ids {
-                if next_mapping.get(&seq_id).is_some() {
-                    continue;
-                }
+        for (pos, seq_id) in sample_list {
+            if next_mapping.get(&seq_id).is_some() {
+                continue;
+            }
 
-                let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
-                debug!("target sample");
-                let token = seq.sampler.sample(ctx, pos as i32);
-                let is_eog_token = self.model.is_eog_token(token);
-                let draft_tokens = draft_mapping.get(&seq_id).unwrap();
+            let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
+            debug!("target sample");
+            let token = seq.sampler.sample(ctx, -1);
+            let is_eog_token = self.model.is_eog_token(token);
+            let draft_tokens = draft_mapping.get(&seq_id).unwrap();
 
-                let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
+            let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
 
-                if !is_eog_token {
-                    seq.sampler.accept(token);
-                }
+            if !is_eog_token {
+                seq.sampler.accept(token);
+            }
 
-                if draft_idx < draft_tokens.len() && token != draft_tokens[draft_idx] {
-                    next_mapping.insert(seq_id, token);
-                } else {
-                    out_mapping.entry(seq_id).or_insert_with(Vec::new).push(token);
-                }
+            if draft_idx < draft_tokens.len() && token != draft_tokens[draft_idx] {
+                next_mapping.insert(seq_id, token);
+            } else {
+                out_mapping.entry(seq_id).or_insert_with(Vec::new).push(token);
             }
         }
 
@@ -726,7 +726,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
             ctx.decode(self.batch)?;
             self.batch.clear();
             
-            decode_seq_list.sort_unstable();
             for seq_id in decode_seq_list {
                 let seq = self.sequence_list[seq_id].as_mut().unwrap();
                 debug!("draft sample");
