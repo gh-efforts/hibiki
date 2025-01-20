@@ -380,6 +380,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
         let mut next_mapping: BTreeMap<u32, LlamaToken> = BTreeMap::new();
         for (pos, seq_id) in sample_list {
             if next_mapping.get(&seq_id).is_some() {
+                debug!("next mapping continue");
                 continue;
             }
 
