@@ -118,7 +118,8 @@ fn exec(args: Args) -> Result<()> {
             backend,
             rx,
             args.kv_cache_size_pre_task,
-            args.parallel_tasks
+            args.parallel_tasks,
+            args.max_unconfirmed_tokens,
         );
 
         let api_handle = api::run(
