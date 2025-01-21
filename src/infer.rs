@@ -584,7 +584,12 @@ struct SpeculativeCompletionsDraftSequenceSlots<'a> {
 }
 
 impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
-    fn new(n_task: u32, batch: &'a mut LlamaBatch, model: &'a LlamaModel) -> Self {
+    fn new(
+        n_task: u32,
+        batch: &'a mut LlamaBatch,
+        model: &'a LlamaModel,
+        max_unconfirmed_tokens: usize
+    ) -> Self {
         let mut sequence_list = Vec::with_capacity(n_task as usize);
 
         for _ in 0..n_task {
@@ -595,7 +600,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
             sequence_list,
             batch,
             model,
-            max_unconfirmed_tokens: 16
+            max_unconfirmed_tokens
         }
     }
 
@@ -680,6 +685,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 out
                             };
 
+                            info!("accept_token_n: {}", out.accept_token_n);
                             let old_pos = seq.confirmed_tokens.len() - 1;
                             let update_to_confirm = &seq.unconfirmed_tokens[..out.accept_token_n as usize];
 
@@ -752,6 +758,7 @@ fn speculative_completions_draft_handler(
     task_rx: &flume::Receiver<CompletionsTask>,
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
+    max_unconfirmed_tokens: usize
 ) -> Result<()> {
     let ctx_params = LlamaContextParams::default()
         .with_offload_kqv(true)
@@ -761,7 +768,7 @@ fn speculative_completions_draft_handler(
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
 
-    let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
+    let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model, max_unconfirmed_tokens);
 
     let select_task = RefCell::new(None);
 
@@ -875,7 +882,8 @@ pub async fn run(
     backend: Arc<LlamaBackend>,
     task_rx: flume::Receiver<CompletionsTask>,
     kv_cache_size_pre_task: u32,
-    n_tasks: u32
+    n_tasks: u32,
+    max_unconfirmed_tokens: usize
 ) -> Result<()> {
     let is_cancel = Arc::new(AtomicBool::new(false));
 
@@ -929,7 +937,8 @@ pub async fn run(
                     &to_target_handler,
                     &task_rx,
                     n_tasks,
-                    kv_cache_size_pre_task
+                    kv_cache_size_pre_task,
+                    max_unconfirmed_tokens
                 )
             });
 

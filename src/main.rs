@@ -56,7 +56,10 @@ struct Args {
     kv_cache_size_pre_task: u32,
 
     #[arg(short, long)]
-    template: Option<String>
+    template: Option<String>,
+
+    #[arg(long, default_value_t = 8)]
+    max_unconfirmed_tokens: usize
 }
 
 fn logger_init() -> Result<()> {
