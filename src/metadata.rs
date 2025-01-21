@@ -124,10 +124,7 @@ impl TryFrom<&LlamaModel> for ModelMetadata {
     type Error = ();
 
     fn try_from(model: &LlamaModel) -> Result<Self, Self::Error> {
-        let vocabulary_size = unsafe {
-            // SAFETY: `model` is not null.
-            llama_cpp_sys_2::llama_n_vocab(model.as_ptr())
-        };
+        let vocabulary_size = model.n_vocab();
 
         let n_embd = unsafe { llama_cpp_sys_2::llama_n_embd(model.as_ptr()) } as usize;
 
