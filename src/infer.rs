@@ -545,6 +545,8 @@ struct SpeculativeCompletionsDraftSequence {
     to_target_channel: flume::Sender<SpeculativeCompletionsTargetInput>,
     from_target_channel: flume::Receiver<SpeculativeCompletionsTargetOutput>,
     maximum_tokens: u32,
+    total_draft_tokens: u32,
+    total_accept_tokens: u32,
 }
 
 impl SpeculativeCompletionsDraftSequence {
@@ -686,6 +688,9 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                             };
 
                             info!("accept_token_n: {}", out.accept_token_n);
+                            seq.total_draft_tokens += seq.unconfirmed_tokens.len() as u32;
+                            seq.total_accept_tokens += out.accept_token_n;
+
                             let old_pos = seq.confirmed_tokens.len() - 1;
                             let update_to_confirm = &seq.unconfirmed_tokens[..out.accept_token_n as usize];
 
@@ -708,6 +713,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 let out_token = seq.confirmed_tokens[pos];
 
                                 if self.model.is_eog_token(out_token) {
+                                    info!("acceptance rate: {}", seq.total_accept_tokens as f32 / seq.total_draft_tokens as f32);
                                     remove_seq = true;
                                     break;
                                 }
@@ -715,6 +721,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 let _ = seq.api_channel.send(out_token);
 
                                 if pos + 1 >= seq.maximum_tokens as usize {
+                                    info!("acceptance rate: {}", seq.total_accept_tokens as f32 / seq.total_draft_tokens as f32);
                                     remove_seq = true;
                                     break;
                                 }
