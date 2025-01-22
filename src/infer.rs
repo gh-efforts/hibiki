@@ -545,6 +545,7 @@ struct SpeculativeCompletionsDraftSequence {
     to_target_channel: flume::Sender<SpeculativeCompletionsTargetInput>,
     from_target_channel: flume::Receiver<SpeculativeCompletionsTargetOutput>,
     maximum_tokens: u32,
+    max_unconfirmed_tokens: usize,
     total_draft_tokens: u32,
     total_accept_tokens: u32,
 }
@@ -555,6 +556,7 @@ impl SpeculativeCompletionsDraftSequence {
         model: &LlamaModel,
         send_to_target: flume::Sender<SpeculativeCompletionsTargetInput>,
         from_target:  flume::Receiver<SpeculativeCompletionsTargetOutput>,
+        max_unconfirmed_tokens: usize,
     ) -> Self {
         let sequence = SpeculativeCompletionsDraftSequence {
             state: DraftSequenceState::Decode,
@@ -573,6 +575,7 @@ impl SpeculativeCompletionsDraftSequence {
             to_target_channel: send_to_target,
             from_target_channel: from_target,
             maximum_tokens: task.maximum_tokens.unwrap(),
+            max_unconfirmed_tokens,
             total_draft_tokens: 0,
             total_accept_tokens: 0
         };
@@ -584,7 +587,6 @@ struct SpeculativeCompletionsDraftSequenceSlots<'a> {
     sequence_list: Vec<Option<SpeculativeCompletionsDraftSequence>>,
     batch: &'a mut LlamaBatch,
     model: &'a LlamaModel,
-    max_unconfirmed_tokens: usize
 }
 
 impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
@@ -592,7 +594,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
         n_task: u32,
         batch: &'a mut LlamaBatch,
         model: &'a LlamaModel,
-        max_unconfirmed_tokens: usize
     ) -> Self {
         let mut sequence_list = Vec::with_capacity(n_task as usize);
 
@@ -604,7 +605,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
             sequence_list,
             batch,
             model,
-            max_unconfirmed_tokens
         }
     }
 
@@ -656,7 +656,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 }
                             }
 
-                            if seq.unconfirmed_tokens.len() >= self.max_unconfirmed_tokens ||
+                            if seq.unconfirmed_tokens.len() >= seq.max_unconfirmed_tokens ||
                                 seq.confirmed_tokens.len() + seq.unconfirmed_tokens.len() >= seq.maximum_tokens as usize {
                                 seq.state = DraftSequenceState::WaitConfirm;
                                 let target_input = SpeculativeCompletionsTargetInput::DraftInput {
@@ -708,9 +708,9 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 }
 
                                 ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.confirmed_tokens.len() as u32 - 1), None)?;
-                                self.max_unconfirmed_tokens = min(2, self.max_unconfirmed_tokens - 1);
+                                seq.max_unconfirmed_tokens = min(2, seq.max_unconfirmed_tokens - 1);
                             } else {
-                                self.max_unconfirmed_tokens += 1;
+                                seq.max_unconfirmed_tokens += 1;
                             }
 
                             let mut remove_seq = false;
@@ -780,7 +780,7 @@ fn speculative_completions_draft_handler(
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
 
-    let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model, max_unconfirmed_tokens);
+    let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
 
     let select_task = RefCell::new(None);
 
@@ -815,7 +815,8 @@ fn speculative_completions_draft_handler(
                         task,
                         model,
                         to_target,
-                        from_target
+                        from_target,
+                        max_unconfirmed_tokens
                     );
 
                     slots.put(draft_seq)?;
@@ -879,7 +880,8 @@ fn speculative_completions_draft_handler(
                     completions_task,
                     model,
                     to_target,
-                    from_target
+                    from_target,
+                    max_unconfirmed_tokens
                 );
 
                 slots.put(draft_seq)?;
