@@ -708,6 +708,9 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 }
 
                                 ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.confirmed_tokens.len() as u32 - 1), None)?;
+                                self.max_unconfirmed_tokens = min(2, self.max_unconfirmed_tokens - 1);
+                            } else {
+                                self.max_unconfirmed_tokens += 1;
                             }
 
                             let mut remove_seq = false;
