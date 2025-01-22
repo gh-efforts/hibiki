@@ -572,7 +572,9 @@ impl SpeculativeCompletionsDraftSequence {
             api_channel: task.from_api,
             to_target_channel: send_to_target,
             from_target_channel: from_target,
-            maximum_tokens: task.maximum_tokens.unwrap()
+            maximum_tokens: task.maximum_tokens.unwrap(),
+            total_draft_tokens: 0,
+            total_accept_tokens: 0
         };
         sequence
     }
