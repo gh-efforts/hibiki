@@ -43,8 +43,20 @@ struct Args {
     #[arg(short, long)]
     model_path: PathBuf,
 
+    #[arg(long)]
+    model_main_gpu: Option<i32>,
+
+    #[arg(long)]
+    model_tensor_split_rate: Option<Vec<f32>>,
+
     #[arg(short, long)]
     draft_model_path: Option<PathBuf>,
+
+    #[arg(long)]
+    draft_model_main_gpu: Option<i32>,
+
+    #[arg(long)]
+    draft_model_tensor_split_rate: Option<Vec<f32>>,
 
     #[arg(long)]
     model_name: String,
@@ -96,13 +108,32 @@ fn exec(args: Args) -> Result<()> {
     let backend = llama_backend::LlamaBackend::init()?;
     let backend = Arc::new(backend);
 
-    let model_params = LlamaModelParams::default()
+    let mut model_params = LlamaModelParams::default()
         .with_n_gpu_layers(u32::MAX);
+
+    if let Some(gpu_idx) = args.model_main_gpu {
+        model_params = model_params.with_main_gpu(gpu_idx);
+    }
+
+    if let Some(split) = &args.model_tensor_split_rate {
+        model_params.params.tensor_split = split.as_slice().as_ptr();
+    }
 
     let model = LlamaModel::load_from_file(&backend, &args.model_path, &model_params)?;
     let model = Arc::new(model);
 
     let draft_model = if let Some(draft_model_path) = args.draft_model_path {
+        let mut draft_model_params = LlamaModelParams::default()
+            .with_n_gpu_layers(u32::MAX);
+
+        if let Some(gpu_idx) = args.draft_model_main_gpu {
+            draft_model_params = draft_model_params.with_main_gpu(gpu_idx);
+        }
+
+        if let Some(split) = &args.draft_model_tensor_split_rate {
+            draft_model_params.params.tensor_split = split.as_slice().as_ptr();
+        }
+
         let draft_model = LlamaModel::load_from_file(&backend, &draft_model_path, &model_params)?;
         Some(Arc::new(draft_model))
     } else {
