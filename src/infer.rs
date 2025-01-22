@@ -673,6 +673,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                             };
 
                             self.batch.add(enter_token, pos as i32, &[seq_id as i32], true)?;
+                            seq.sampler.accept(enter_token);
                             decode_seq_list.insert(seq_id, self.batch.n_tokens() - 1);
                             need_loop = true;
                         }
