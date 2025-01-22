@@ -701,6 +701,15 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 seq.confirmed_tokens.push(next_token);
                             }
 
+                            let accept_rate = out.accept_token_n as f32 / seq.unconfirmed_tokens.len() as f32;
+                            if accept_rate >= 0.8 {
+                                seq.max_unconfirmed_tokens += 2;
+                            }
+
+                            if accept_rate < 0.4 {
+                                seq.max_unconfirmed_tokens = max(2, seq.max_unconfirmed_tokens - 2);
+                            }
+
                             if out.accept_token_n as usize != seq.unconfirmed_tokens.len() {
                                 seq.sampler.reset();
                                 for token in seq.confirmed_tokens.iter() {
@@ -708,9 +717,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 }
 
                                 ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.confirmed_tokens.len() as u32 - 1), None)?;
-                                seq.max_unconfirmed_tokens = max(2, seq.max_unconfirmed_tokens - 1);
-                            } else {
-                                seq.max_unconfirmed_tokens += 1;
                             }
 
                             let mut remove_seq = false;
