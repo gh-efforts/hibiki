@@ -10,7 +10,7 @@ use llama_cpp_2::model::{LlamaModel};
 use llama_cpp_2::token::LlamaToken;
 use llama_cpp_sys_2::hibiki_common_speculative_are_compatible;
 use std::cell::RefCell;
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::{BTreeMap};
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -708,7 +708,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                 }
 
                                 ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(seq.confirmed_tokens.len() as u32 - 1), None)?;
-                                seq.max_unconfirmed_tokens = min(2, seq.max_unconfirmed_tokens - 1);
+                                seq.max_unconfirmed_tokens = max(2, seq.max_unconfirmed_tokens - 1);
                             } else {
                                 seq.max_unconfirmed_tokens += 1;
                             }
