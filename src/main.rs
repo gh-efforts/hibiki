@@ -134,7 +134,7 @@ fn exec(args: Args) -> Result<()> {
             draft_model_params.params.tensor_split = split.as_slice().as_ptr();
         }
 
-        let draft_model = LlamaModel::load_from_file(&backend, &draft_model_path, &model_params)?;
+        let draft_model = LlamaModel::load_from_file(&backend, &draft_model_path, &draft_model_params)?;
         Some(Arc::new(draft_model))
     } else {
         None
