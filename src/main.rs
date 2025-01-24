@@ -71,7 +71,10 @@ struct Args {
     template: Option<String>,
 
     #[arg(long, default_value_t = 8)]
-    max_unconfirmed_tokens: usize
+    max_unconfirmed_tokens: usize,
+
+    #[arg(long, default_value_t = 16)]
+    n_candidates: usize,
 }
 
 fn logger_init() -> Result<()> {
@@ -151,6 +154,7 @@ fn exec(args: Args) -> Result<()> {
             args.kv_cache_size_pre_task,
             args.parallel_tasks,
             args.max_unconfirmed_tokens,
+            args.n_candidates,
         );
 
         let api_handle = api::run(

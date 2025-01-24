@@ -13,6 +13,7 @@ use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap};
 use std::num::NonZeroU32;
+use std::ptr::slice_from_raw_parts;
 use std::rc::Rc;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -252,10 +253,11 @@ struct SpeculativeCompletionsTargetSequenceSlots<'a> {
     sequence_list: Vec<Option<SpeculativeCompletionsTargetSequence>>,
     batch: &'a mut LlamaBatch,
     model: &'a LlamaModel,
+    n_candidates: usize
 }
 
 impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
-    fn new(n_task: u32, batch: &'a mut LlamaBatch, model: &'a LlamaModel) -> Self {
+    fn new(n_task: u32, batch: &'a mut LlamaBatch, model: &'a LlamaModel, n_candidates: usize) -> Self {
         let mut sequence_list = Vec::with_capacity(n_task as usize);
 
         for _ in 0..n_task {
@@ -266,6 +268,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             sequence_list,
             batch,
             model,
+            n_candidates
         }
     }
 
@@ -391,24 +394,40 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
 
             let seq = self.sequence_list[seq_id as usize].as_mut().unwrap();
             debug!("target sample");
-            let token = seq.sampler.sample(ctx, i);
-            let candidates = seq.sampler.get_candidates();
+            let mut token = seq.sampler.sample(ctx, i);
 
-            assert!(candidates.sorted);
-            println!("select {}", candidates.selected);
+            let draft_tokens = draft_mapping.get(&seq_id).unwrap();
+            let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
+
+            let mut set_next = true;
+
+            if token != draft_tokens[draft_idx] {
+                let candidates = seq.sampler.get_candidates();
+                ensure!(candidates.sorted);
+                ensure!(self.n_candidates <= candidates.size);
+
+                let token_data_list = unsafe { &*slice_from_raw_parts(candidates.data, self.n_candidates) };
+
+                for td in token_data_list {
+                    if td.id == draft_tokens[draft_idx].0 {
+                        token = draft_tokens[draft_idx];
+                        set_next = false;
+                        break;
+                    }
+                }
+            } else {
+                false;
+            }
 
             let is_eog_token = self.model.is_eog_token(token);
-            let draft_tokens = draft_mapping.get(&seq_id).unwrap();
-
-            let draft_idx = pos as usize + 1 - seq.accepted_token_list.len();
             if !is_eog_token {
                 seq.sampler.accept(token);
             }
 
-            if token != draft_tokens[draft_idx] {
-                next_mapping.insert(seq_id, token);
-            } else {
+            if !set_next {
                 out_mapping.get_mut(&seq_id).unwrap().push(token);
+            } else {
+                next_mapping.insert(seq_id, token);
             }
         }
 
@@ -438,6 +457,7 @@ fn speculative_completions_target_handler(
     task_rx: &flume::Receiver<SpeculativeCompletionsTargetTask>,
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
+    n_candidates: usize,
     _is_cancel: &AtomicBool
 ) -> Result<()> {
     let ctx_params = LlamaContextParams::default()
@@ -448,7 +468,7 @@ fn speculative_completions_target_handler(
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
 
-    let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model);
+    let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model, n_candidates);
 
     let select_tmp = RefCell::new(None);
     loop {
@@ -909,7 +929,8 @@ pub async fn run(
     task_rx: flume::Receiver<CompletionsTask>,
     kv_cache_size_pre_task: u32,
     n_tasks: u32,
-    max_unconfirmed_tokens: usize
+    max_unconfirmed_tokens: usize,
+    n_candidates: usize
 ) -> Result<()> {
     let is_cancel = Arc::new(AtomicBool::new(false));
 
@@ -951,7 +972,8 @@ pub async fn run(
                         &from_draft_handler,
                         n_tasks,
                         kv_cache_size_pre_task,
-                        &*is_cancel
+                        n_candidates,
+                        &*is_cancel,
                     )
                 }
             });
