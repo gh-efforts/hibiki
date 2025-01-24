@@ -400,7 +400,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                 seq.sampler.accept(token);
             }
 
-            if draft_idx < draft_tokens.len() && token != draft_tokens[draft_idx] {
+            if token != draft_tokens[draft_idx] {
                 next_mapping.insert(seq_id, token);
             } else {
                 out_mapping.get_mut(&seq_id).unwrap().push(token);
