@@ -1,7 +1,7 @@
 use llama_cpp_2::context::LlamaContext;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::token::LlamaToken;
-use llama_cpp_sys_2::HibikiCommonSampler;
+use llama_cpp_sys_2::{llama_token_data_array, HibikiCommonSampler};
 
 pub struct Sampler {
     inner: *mut HibikiCommonSampler
@@ -63,6 +63,12 @@ impl Sampler {
     pub fn reset(&mut self) {
         unsafe {
             llama_cpp_sys_2::hibiki_common_sampler_reset(self.inner);
+        }
+    }
+
+    pub fn get_candidates(&self) -> &llama_token_data_array{
+        unsafe {
+            &*llama_cpp_sys_2::hibiki_common_sampler_get_candidates(self.inner)
         }
     }
 }
