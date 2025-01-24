@@ -409,6 +409,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
 
                 for td in token_data_list {
                     if td.id == draft_tokens[draft_idx].0 {
+                        info!("candidate found");
                         token = draft_tokens[draft_idx];
                         set_next = false;
                         break;
