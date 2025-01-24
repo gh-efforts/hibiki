@@ -402,20 +402,20 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             let mut set_next = true;
 
             if token != draft_tokens[draft_idx] {
-                // let candidates = seq.sampler.get_candidates();
-                // ensure!(candidates.sorted);
-                //
-                // let token_data_list = unsafe { &*slice_from_raw_parts(candidates.data, min(self.n_candidates, candidates.size)) };
-                //
-                // for td in token_data_list {
-                //     if td.id == draft_tokens[draft_idx].0 {
-                //         token = draft_tokens[draft_idx];
-                //         set_next = false;
-                //         break;
-                //     }
-                // }
+                let candidates = seq.sampler.get_candidates();
+                ensure!(candidates.sorted);
+
+                let token_data_list = unsafe { &*slice_from_raw_parts(candidates.data, min(self.n_candidates, candidates.size)) };
+
+                for td in token_data_list {
+                    if td.id == draft_tokens[draft_idx].0 {
+                        token = draft_tokens[draft_idx];
+                        set_next = false;
+                        break;
+                    }
+                }
             } else {
-                false;
+                set_next = false;
             }
 
             let is_eog_token = self.model.is_eog_token(token);
@@ -784,7 +784,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                 let seq = self.sequence_list[seq_id].as_mut().unwrap();
                 debug!("draft sample");
                 let draft_token = seq.sampler.sample(ctx, logits_pos);
-                // seq.sampler.accept(enter_token);
+                seq.sampler.accept(draft_token);
                 seq.unconfirmed_tokens.push(draft_token);
             }
             Ok(Poll::Ready(()))
