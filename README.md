@@ -1,4 +1,6 @@
-# Hibiki
+# Hibiki(ひびき)
+
+<img src="assets/hibiki.png" alt="hibiki" width="350"/>
 
 ### Usage: 
 ```shell
