@@ -404,9 +404,8 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             if token != draft_tokens[draft_idx] {
                 let candidates = seq.sampler.get_candidates();
                 ensure!(candidates.sorted);
-                ensure!(self.n_candidates <= candidates.size);
 
-                let token_data_list = unsafe { &*slice_from_raw_parts(candidates.data, self.n_candidates) };
+                let token_data_list = unsafe { &*slice_from_raw_parts(candidates.data, min(self.n_candidates, candidates.size)) };
 
                 for td in token_data_list {
                     if td.id == draft_tokens[draft_idx].0 {
