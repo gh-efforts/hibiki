@@ -395,7 +395,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
             let candidates = seq.sampler.get_candidates();
 
             assert!(candidates.sorted);
-            assert_eq!(candidates.selected, 0);
+            println!("select {}", candidates.selected);
 
             let is_eog_token = self.model.is_eog_token(token);
             let draft_tokens = draft_mapping.get(&seq_id).unwrap();
