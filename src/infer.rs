@@ -697,7 +697,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                             };
 
                             self.batch.add(enter_token, pos as i32, &[seq_id as i32], true)?;
-                            seq.sampler.accept(enter_token);
                             decode_seq_list.insert(seq_id, self.batch.n_tokens() - 1);
                             need_loop = true;
                         }
@@ -785,6 +784,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                 let seq = self.sequence_list[seq_id].as_mut().unwrap();
                 debug!("draft sample");
                 let draft_token = seq.sampler.sample(ctx, logits_pos);
+                // seq.sampler.accept(enter_token);
                 seq.unconfirmed_tokens.push(draft_token);
             }
             Ok(Poll::Ready(()))
