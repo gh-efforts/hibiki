@@ -20,6 +20,10 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
+static OFF_OFFLOAD_KQV: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+    std::env::var("HIBIKI_OFF_OFFLOAD_KQV").is_ok()
+});
+
 struct Sequence {
     input_tokens: Vec<LlamaToken>,
     sampler: Sampler,
@@ -107,7 +111,10 @@ impl <'a> SequenceSlots<'a> {
                     continue;
                 }
 
-                let _res = seq.callback.send(out_token);
+                if seq.callback.send(out_token).is_err() {
+                    remove_slot!();
+                    continue;
+                }
 
                 if seq.token_pos + 1 >= seq.maximum_tokens {
                     remove_slot!();
@@ -135,7 +142,7 @@ fn completions_handler(
     is_cancel: &AtomicBool
 ) -> Result<()> {
     let ctx_params = LlamaContextParams::default()
-        .with_offload_kqv(true)
+        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
@@ -461,7 +468,7 @@ fn speculative_completions_target_handler(
     _is_cancel: &AtomicBool
 ) -> Result<()> {
     let ctx_params = LlamaContextParams::default()
-        .with_offload_kqv(true)
+        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
@@ -754,7 +761,11 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                     break;
                                 }
 
-                                let _ = seq.api_channel.send(out_token);
+                                if seq.api_channel.send(out_token).is_err() {
+                                    info!("acceptance rate: {}", seq.total_accept_tokens as f32 / seq.total_draft_tokens as f32);
+                                    remove_seq = true;
+                                    break;
+                                }
 
                                 if pos + 1 >= seq.maximum_tokens as usize {
                                     info!("acceptance rate: {}", seq.total_accept_tokens as f32 / seq.total_draft_tokens as f32);
@@ -805,7 +816,7 @@ fn speculative_completions_draft_handler(
     max_unconfirmed_tokens: usize
 ) -> Result<()> {
     let ctx_params = LlamaContextParams::default()
-        .with_offload_kqv(true)
+        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
