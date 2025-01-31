@@ -31,7 +31,7 @@ jobs:
 
           # linux
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-22.04
+            os: ubuntu-20.04
             build_tool: cargo
             features: cuda
             include: README.md
