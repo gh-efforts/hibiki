@@ -31,7 +31,7 @@ jobs:
 
           # linux
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-20.04
+            os: ubuntu-22.04
             build_tool: cargo
             features: cuda
             include: README.md
@@ -40,6 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.21
+        with:
+          cuda: '12.6.3'
       - run: |
           $cudaPath = [System.Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
           $cublasDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublas64_12.dll'
