@@ -1,26 +1,136 @@
+use std::ffi::{CStr, CString};
 use crate::CompletionsTask;
 use anyhow::{anyhow, ensure, Result};
-use async_openai::types::{ChatChoice, ChatChoiceStream, ChatCompletionRequestAssistantMessageContent, ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessageContent, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, Choice, Prompt, Role};
+use async_openai::types::{ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, FunctionCall, Prompt, Role};
 use axum::body::Body;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response, Sse};
 use axum::routing::post;
 use axum::{Json, Router};
 use chrono::Utc;
-use llama_cpp_2::model::{AddBos, LlamaChatMessage, LlamaModel, Special};
+use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::token::LlamaToken;
 use std::net::SocketAddr;
+use std::ptr::null;
 use std::sync::Arc;
 use std::time::Duration;
 use axum::http::StatusCode;
 use futures_util::StreamExt;
+use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatParams, HibikiCommonChatTemplates};
+use serde::Deserialize;
+
+struct ChatTemplates {
+    inner: *mut HibikiCommonChatTemplates
+}
+
+unsafe impl Send for ChatTemplates {}
+
+unsafe impl Sync for ChatTemplates {}
+
+impl ChatTemplates {
+    fn from_model(model: &LlamaModel, tmpl: Option<&str>) -> Self {
+        let cstr;
+
+        let tmpl_cstr_ptr = if let Some(tmpl) = tmpl {
+            cstr = CString::new(tmpl).unwrap();
+            cstr.as_bytes_with_nul().as_ptr()
+        } else {
+            null()
+        };
+
+        ChatTemplates {
+            inner: unsafe { hibiki_common_chat_templates_from_model(model.as_ptr(), tmpl_cstr_ptr as *const i8) },
+        }
+    }
+
+    #[allow(unused)]
+    fn as_ptr(&self) -> *const HibikiCommonChatTemplates {
+        self.inner
+    }
+
+    #[allow(unused)]
+    fn as_mut_ptr(&self) -> *mut HibikiCommonChatTemplates {
+        self.inner
+    }
+}
+
+impl Drop for ChatTemplates {
+    fn drop(&mut self) {
+        unsafe { hibiki_common_chat_templates_free(self.inner) }
+    }
+}
+
+struct ChatParams {
+    inner: *mut HibikiCommonChatParams
+}
+
+impl ChatParams {
+    fn get_prompt(&self) -> Result<String> {
+        unsafe {
+            // exclude \0
+            let strlen = hibiki_get_common_chat_params_prompt_length(self.inner);
+            let mut str_buff = vec![0u8; strlen + 1];
+            hibiki_get_common_chat_params_prompt(self.inner, str_buff.as_mut_ptr() as *mut i8);
+            let str = CStr::from_bytes_until_nul(&str_buff)?.to_str()?.to_string();
+            Ok(str)
+        }
+    }
+
+    fn get_chat_format(&self) -> i32 {
+        unsafe { hibiki_get_common_chat_params_format(self.inner) }
+    }
+}
+
+impl Drop for ChatParams {
+    fn drop(&mut self) {
+        unsafe {
+            hibiki_common_chat_params_free(self.inner)
+        }
+    }
+}
+
+fn body_json_to_chat_params(tmpl: &ChatTemplates, body_json: &str) -> ChatParams {
+    unsafe {
+        let body_json = CString::new(body_json).unwrap();
+        let params = hibiki_body_to_chat_params(tmpl.inner, body_json.as_bytes_with_nul().as_ptr() as *const i8);
+        ChatParams { inner: params }
+    }
+}
+
+#[derive(Deserialize)]
+struct CommonToolCall {
+    name: String,
+    arguments: String,
+    id: String,
+}
+
+#[allow(unused)]
+#[derive(Deserialize)]
+struct CommonChatMsg {
+    role: String,
+    content: String,
+    tool_calls: Vec<CommonToolCall>,
+    tool_plan: String,
+}
+
+fn output_parse(msg: &str, format: i32) -> Result<CommonChatMsg> {
+    let mut buff = vec![0u8; msg.len() + 8192];
+    let cs = CString::new(msg)?;
+
+    unsafe {
+        hibiki_common_chat_parse(cs.as_ptr(), format, buff.as_mut_ptr() as *mut i8);
+        let out_json = CStr::from_bytes_with_nul(&buff)?.to_str()?.to_string();
+        let out_msg: CommonChatMsg = serde_json::from_str(&out_json)?;
+        Ok(out_msg)
+    }
+}
 
 struct Context {
     model: Arc<LlamaModel>,
     model_name: String,
     backend_bridge: flume::Sender<CompletionsTask>,
     kv_cache_size_pre_task: u32,
-    chat_template: Option<String>,
+    chat_template: Arc<ChatTemplates>,
 }
 
 async fn completion_req_to_task(
@@ -67,56 +177,19 @@ async fn send_to_backend(
     ctx.backend_bridge.send_async(task).await?;
     Ok(())
 }
-
+// ret: (task, chat_template_format)
 async fn chat_completion_req_to_task(
     req: async_openai::types::CreateChatCompletionRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
-    template: Option<String>,
-) -> Result<CompletionsTask> {
+    template: Arc<ChatTemplates>
+) -> Result<(CompletionsTask, i32)> {
     tokio::task::spawn_blocking(move || {
-        let mut chat_messages = Vec::new();
+        let req_json = serde_json::to_string(&req)?;
+        let params = body_json_to_chat_params(&template, req_json.as_str());
+        let prompt = params.get_prompt()?;
+        let format = params.get_chat_format();
 
-        for msg in req.messages {
-            let chat_msg = match msg {
-                ChatCompletionRequestMessage::System(v) => {
-                    let content = match v.content {
-                        ChatCompletionRequestSystemMessageContent::Text(content) => content,
-                        ChatCompletionRequestSystemMessageContent::Array(_) => {
-                            return Err(anyhow!("Array content not supported"));
-                        }
-                    };
-                    LlamaChatMessage::new(String::from("system"), String::from(content))?
-                }
-                ChatCompletionRequestMessage::User(v) => {
-                    let content = match v.content {
-                        ChatCompletionRequestUserMessageContent::Text(content) => content,
-                        ChatCompletionRequestUserMessageContent::Array(_) => {
-                            return Err(anyhow!("Array content not supported"));
-                        }
-                    };
-                    LlamaChatMessage::new(String::from("user"), String::from(content))?
-                }
-                ChatCompletionRequestMessage::Assistant(v) => {
-                    if let Some(content) = v.content {
-                        let content = match content {
-                            ChatCompletionRequestAssistantMessageContent::Text(content) => content,
-                            ChatCompletionRequestAssistantMessageContent::Array(_) => {
-                                return Err(anyhow!("Array content not supported"));
-                            }
-                        };
-                        LlamaChatMessage::new(String::from("user"), String::from(content))?
-                    } else {
-                        continue;
-                    }
-                }
-                _ => return Err(anyhow!("Only system and user messages are supported")),
-            };
-
-            chat_messages.push(chat_msg);
-        }
-
-        let prompt = model.apply_chat_template(template, chat_messages, true)?;
         let input_tokens = model.str_to_token(&prompt, AddBos::Always)?;
 
         let task = CompletionsTask {
@@ -130,7 +203,7 @@ async fn chat_completion_req_to_task(
             temperature: req.temperature,
             top_p: req.top_p
         };
-        Result::<_, anyhow::Error>::Ok(task)
+        Result::<_, anyhow::Error>::Ok((task, format))
     }).await?
 }
 
@@ -145,7 +218,11 @@ async fn v1_chat_completions(
     let chat_completion_id = rand::random::<u64>().to_string();
 
     let fut = async {
-        let task = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.chat_template.clone()).await?;
+        if is_stream {
+            ensure!(req.tools.is_none());
+        }
+
+        let (task, format) = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.chat_template.clone()).await?;
         let prompt_tokens = task.input_token_list.len() as u32;
         ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
         send_to_backend(task, &*ctx).await?;
@@ -222,6 +299,7 @@ async fn v1_chat_completions(
 
             let completion_tokens = out_tokens.len() as u32;
             let text = tokens_to_string(out_tokens, ctx.model.clone()).await?;
+            let chat_msg = output_parse(text.as_str(), format)?;
 
             let chat_completion_resp = async_openai::types::CreateChatCompletionResponse {
                 id: chat_completion_id,
@@ -230,9 +308,23 @@ async fn v1_chat_completions(
                         index: 0,
                         #[allow(deprecated)]
                         message: ChatCompletionResponseMessage {
-                            content: Some(text),
+                            content: Some(chat_msg.content),
                             refusal: None,
-                            tool_calls: None,
+                            tool_calls: {
+                                let list = chat_msg.tool_calls.into_iter().map(|tool_call| {
+                                    ChatCompletionMessageToolCall {
+                                        id: tool_call.id,
+                                        r#type: ChatCompletionToolType::Function,
+                                        function: FunctionCall {
+                                            name: tool_call.name,
+                                            arguments: tool_call.arguments,
+                                        }
+                                    }
+                                })
+                                .collect::<Vec<_>>();
+
+                                Some(list)
+                            },
                             role: Role::Assistant,
                             function_call: None,
                             audio: None
@@ -392,12 +484,14 @@ pub async fn run(
     backend_bridge: flume::Sender<CompletionsTask>,
     template: Option<String>,
 ) -> Result<()> {
+    let template = ChatTemplates::from_model(&model, template.as_deref());
+
     let ctx = Context {
         model,
         model_name,
         backend_bridge,
         kv_cache_size_pre_task,
-        chat_template: template
+        chat_template: Arc::new(template)
     };
 
     let ctx = Arc::new(ctx);
