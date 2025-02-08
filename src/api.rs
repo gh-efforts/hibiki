@@ -187,7 +187,11 @@ async fn chat_completion_req_to_task(
     tokio::task::spawn_blocking(move || {
         let req_json = serde_json::to_string(&req)?;
         let params = body_json_to_chat_params(&template, req_json.as_str());
+        debug!("body_json_to_chat_params finished");
+
         let prompt = params.get_prompt()?;
+        debug!("prompt: {:?}", prompt);
+
         let format = params.get_chat_format();
 
         let input_tokens = model.str_to_token(&prompt, AddBos::Always)?;
