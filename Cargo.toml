@@ -23,7 +23,7 @@ futures-util = { version = "0.3" , default-features = false }
 serde = { version = "1", features = ["derive"] }
 
 [features]
-#cuda = ["llama-cpp-2/cuda"]
+cuda = ["llama-cpp-2/cuda"]
 dynlink = ["llama-cpp-2/dynamic-link"]
 
 [profile.release]
