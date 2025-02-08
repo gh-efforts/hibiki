@@ -223,6 +223,7 @@ async fn v1_chat_completions(
         }
 
         let (task, format) = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.chat_template.clone()).await?;
+        debug!("chat_completion_req_to_task finished");
         let prompt_tokens = task.input_token_list.len() as u32;
         ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
         send_to_backend(task, &*ctx).await?;
