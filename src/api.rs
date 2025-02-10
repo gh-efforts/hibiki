@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use axum::http::StatusCode;
 use futures_util::StreamExt;
-use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatParams, HibikiCommonChatTemplates};
+use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatFormat, HibikiCommonChatParams, HibikiCommonChatTemplates};
 use serde::Deserialize;
 
 struct ChatTemplates {
@@ -76,7 +76,7 @@ impl ChatParams {
         }
     }
 
-    fn get_chat_format(&self) -> i32 {
+    fn get_chat_format(&self) -> HibikiCommonChatFormat {
         unsafe { hibiki_get_common_chat_params_format(self.inner) }
     }
 }
@@ -97,7 +97,7 @@ fn body_json_to_chat_params(tmpl: &ChatTemplates, body_json: &str) -> ChatParams
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct CommonToolCall {
     name: String,
     arguments: String,
@@ -105,7 +105,7 @@ struct CommonToolCall {
 }
 
 #[allow(unused)]
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct CommonChatMsg {
     role: String,
     content: String,
@@ -113,13 +113,17 @@ struct CommonChatMsg {
     tool_plan: String,
 }
 
-fn output_parse(msg: &str, format: i32) -> Result<CommonChatMsg> {
+fn output_parse(msg: &str, format: HibikiCommonChatFormat) -> Result<CommonChatMsg> {
     let mut buff = vec![0u8; msg.len() + 8192];
+    let msg = msg
+        .replace(r#"\n"#, "")
+        .replace(r#"\""#, "\"");
+
     let cs = CString::new(msg)?;
 
     unsafe {
-        hibiki_common_chat_parse(cs.as_ptr(), format, buff.as_mut_ptr() as *mut i8);
-        let out_json = CStr::from_bytes_with_nul(&buff)?.to_str()?.to_string();
+        hibiki_common_chat_parse(cs.as_bytes_with_nul().as_ptr() as *const i8, format, buff.as_mut_ptr() as *mut i8);
+        let out_json = CStr::from_bytes_until_nul(&buff)?.to_str()?.to_string();
         let out_msg: CommonChatMsg = serde_json::from_str(&out_json)?;
         Ok(out_msg)
     }
@@ -183,7 +187,7 @@ async fn chat_completion_req_to_task(
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
     template: Arc<ChatTemplates>
-) -> Result<(CompletionsTask, i32)> {
+) -> Result<(CompletionsTask, HibikiCommonChatFormat)> {
     tokio::task::spawn_blocking(move || {
         let req_json = serde_json::to_string(&req)?;
         let params = body_json_to_chat_params(&template, req_json.as_str());
@@ -305,6 +309,7 @@ async fn v1_chat_completions(
             let completion_tokens = out_tokens.len() as u32;
             let text = tokens_to_string(out_tokens, ctx.model.clone()).await?;
             let chat_msg = output_parse(text.as_str(), format)?;
+            debug!("chat_msg: {:?}", chat_msg);
 
             let chat_completion_resp = async_openai::types::CreateChatCompletionResponse {
                 id: chat_completion_id,
