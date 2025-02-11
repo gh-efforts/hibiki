@@ -2,7 +2,7 @@
 extern crate log;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use llama_cpp_2::llama_backend;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
+use llama_cpp_sys_2::{LLAMA_SPLIT_MODE_LAYER, LLAMA_SPLIT_MODE_ROW};
 
 mod api;
 mod infer;
@@ -34,6 +35,12 @@ struct CompletionsTask {
     maximum_tokens: Option<u32>
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
+enum SplitMode {
+    Layer,
+    Row
+}
+
 #[derive(Parser)]
 #[command(version)]
 struct Args {
@@ -45,6 +52,9 @@ struct Args {
 
     #[arg(long)]
     model_main_gpu: Option<i32>,
+
+    #[arg(long)]
+    split_mode: Option<SplitMode>,
 
     #[arg(long)]
     model_tensor_split_rate: Option<Vec<f32>>,
@@ -118,6 +128,13 @@ fn exec(args: Args) -> Result<()> {
         model_params = model_params.with_main_gpu(gpu_idx);
     }
 
+    if let Some(split_mode) = args.split_mode {
+        model_params.params.split_mode = match split_mode {
+            SplitMode::Layer => LLAMA_SPLIT_MODE_LAYER,
+            SplitMode::Row => LLAMA_SPLIT_MODE_ROW
+        };
+    }
+
     if let Some(split) = &args.model_tensor_split_rate {
         model_params.params.tensor_split = split.as_slice().as_ptr();
     }
@@ -131,6 +148,13 @@ fn exec(args: Args) -> Result<()> {
 
         if let Some(gpu_idx) = args.draft_model_main_gpu {
             draft_model_params = draft_model_params.with_main_gpu(gpu_idx);
+        }
+
+        if let Some(split_mode) = args.split_mode {
+            draft_model_params.params.split_mode = match split_mode {
+                SplitMode::Layer => LLAMA_SPLIT_MODE_LAYER,
+                SplitMode::Row => LLAMA_SPLIT_MODE_ROW
+            };
         }
 
         if let Some(split) = &args.draft_model_tensor_split_rate {
