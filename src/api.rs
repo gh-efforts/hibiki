@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString};
 use crate::CompletionsTask;
 use anyhow::{anyhow, ensure, Result};
-use async_openai::types::{ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, FunctionCall, Prompt, Role};
+use async_openai::types::{ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, FinishReason, FunctionCall, Prompt, Role};
 use axum::body::Body;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response, Sse};
@@ -315,6 +315,13 @@ async fn v1_chat_completions(
                 id: chat_completion_id,
                 choices: vec![
                     ChatChoice {
+                        finish_reason: {
+                            if !chat_msg.tool_calls.is_empty() {
+                                Some(FinishReason::ToolCalls)
+                            } else {
+                                None
+                            }
+                        },
                         index: 0,
                         #[allow(deprecated)]
                         message: ChatCompletionResponseMessage {
