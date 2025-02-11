@@ -346,7 +346,6 @@ async fn v1_chat_completions(
                             function_call: None,
                             audio: None
                         },
-                        finish_reason: None,
                         logprobs: None,
                     }
                 ],
