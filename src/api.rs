@@ -331,7 +331,13 @@ async fn v1_chat_completions(
                                 let list = chat_msg.tool_calls.into_iter().map(|tool_call| {
                                     ChatCompletionMessageToolCall {
                                         index: Some(0),
-                                        id: tool_call.id,
+                                        id: {
+                                            if tool_call.id.is_empty() {
+                                                format!("call_def_{}", rand::random::<u32>())
+                                            } else {
+                                                tool_call.id
+                                            }
+                                        },
                                         r#type: ChatCompletionToolType::Function,
                                         function: FunctionCall {
                                             name: tool_call.name,
