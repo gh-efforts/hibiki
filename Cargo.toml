@@ -15,7 +15,7 @@ tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8" }
 log = "0.4"
 log4rs = "1"
-async-openai = {version = "0.27", default-features = false}
+async-openai = {version = "0.27", default-features = false, git = "https://github.com/xutianyi1999/async-openai.git" }
 flume = { version = "0.11", default-features = false, features = ["async", "select"] }
 rand = "0.9"
 chrono = "0.4"
