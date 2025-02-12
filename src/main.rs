@@ -1,7 +1,8 @@
 #[macro_use]
 extern crate log;
 
-use anyhow::Result;
+use std::ffi::{CString};
+use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use llama_cpp_2::llama_backend;
 use llama_cpp_2::model::params::LlamaModelParams;
@@ -16,7 +17,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
-use llama_cpp_sys_2::{LLAMA_SPLIT_MODE_LAYER, LLAMA_SPLIT_MODE_ROW};
+use llama_cpp_sys_2::{ggml_backend_dev_t, ggml_backend_device_register, ggml_backend_reg_by_name, ggml_backend_reg_get_proc_address, LLAMA_SPLIT_MODE_LAYER, LLAMA_SPLIT_MODE_ROW};
 
 mod api;
 mod infer;
@@ -57,7 +58,7 @@ struct Args {
     split_mode: Option<SplitMode>,
 
     #[arg(long)]
-    model_tensor_split_rate: Option<Vec<f32>>,
+    model_tensor_split_rate: Option<String>,
 
     #[arg(short, long)]
     draft_model_path: Option<PathBuf>,
@@ -66,7 +67,10 @@ struct Args {
     draft_model_main_gpu: Option<i32>,
 
     #[arg(long)]
-    draft_model_tensor_split_rate: Option<Vec<f32>>,
+    draft_model_tensor_split_rate: Option<String>,
+
+    #[arg(long)]
+    rpc_servers: Option<String>,
 
     #[arg(long)]
     model_name: String,
@@ -114,10 +118,50 @@ fn logger_init() -> Result<()> {
     Ok(())
 }
 
+fn add_rpc_devices(servers: &str) -> Result<()> {
+    type GgmlBackendRpcAddDeviceFn = fn(*const std::ffi::c_char) -> ggml_backend_dev_t;
+    let servers = servers.split(",")
+        .collect::<Vec<_>>();
+
+    if servers.is_empty() {
+        return Err(anyhow!("no RPC servers specified"));
+    }
+    unsafe {
+        let rpc_reg = ggml_backend_reg_by_name(CString::new("RPC")?.as_ptr());
+
+        if rpc_reg.is_null() {
+            return Err(anyhow!("failed to find RPC backend"));
+        }
+
+        let add_device_ptr = ggml_backend_reg_get_proc_address(rpc_reg, CString::new("ggml_backend_rpc_add_device")?.as_ptr());
+
+        if add_device_ptr.is_null() {
+            return Err(anyhow!("failed to find RPC device add function"));
+        }
+        let add_device_fn: GgmlBackendRpcAddDeviceFn = std::mem::transmute(add_device_ptr);
+
+        for server in servers {
+            let dev = add_device_fn(CString::new(server)?.as_ptr()) ;
+
+            if dev.is_null() {
+                return Err(anyhow!("failed to register RPC device"));
+            } else {
+                ggml_backend_device_register(dev);
+            }
+        }
+    }
+    Ok(())
+}
+
 fn exec(args: Args) -> Result<()> {
     logger_init()?;
 
     let rt = tokio::runtime::Runtime::new()?;
+
+    if let Some(rpc_servers) = args.rpc_servers {
+        add_rpc_devices(&rpc_servers)?;
+    }
+
     let backend = llama_backend::LlamaBackend::init()?;
     let backend = Arc::new(backend);
 
@@ -136,7 +180,11 @@ fn exec(args: Args) -> Result<()> {
     }
 
     if let Some(split) = &args.model_tensor_split_rate {
-        model_params.params.tensor_split = split.as_slice().as_ptr();
+        let mut split_list = Vec::new();
+        for x in split.split(",") {
+            split_list.push(f32::from_str(x)?);
+        }
+        model_params.params.tensor_split = split_list.as_ptr();
     }
 
     let model = LlamaModel::load_from_file(&backend, &args.model_path, &model_params)?;
@@ -158,7 +206,11 @@ fn exec(args: Args) -> Result<()> {
         }
 
         if let Some(split) = &args.draft_model_tensor_split_rate {
-            draft_model_params.params.tensor_split = split.as_slice().as_ptr();
+            let mut split_list = Vec::new();
+            for x in split.split(",") {
+                split_list.push(f32::from_str(x)?);
+            }
+            draft_model_params.params.tensor_split = split_list.as_ptr();
         }
 
         let draft_model = LlamaModel::load_from_file(&backend, &draft_model_path, &draft_model_params)?;
