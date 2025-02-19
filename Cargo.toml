@@ -21,6 +21,7 @@ rand = "0.9"
 chrono = "0.4"
 futures-util = { version = "0.3" , default-features = false }
 serde = { version = "1", features = ["derive"] }
+radix_trie = "0.2"
 
 [features]
 cuda = ["llama-cpp-2/cuda"]

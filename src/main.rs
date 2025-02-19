@@ -22,6 +22,7 @@ use llama_cpp_sys_2::{ggml_backend_dev_t, ggml_backend_device_register, ggml_bac
 mod api;
 mod infer;
 mod sampler;
+mod radixtrie_kv_cache;
 #[allow(unused)]
 mod metadata;
 
