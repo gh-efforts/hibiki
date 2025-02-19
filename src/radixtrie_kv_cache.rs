@@ -28,7 +28,7 @@ impl <'a, 'b: 'a> RadixTrieKVCache<'a, 'b> {
         }
     }
 
-    pub fn get(&self, seq: &[llama_token]) -> Option<(Vec<u8>, usize)> {
+    pub fn get(&mut self, seq: &[llama_token]) -> Option<(Vec<u8>, usize)> {
         let get_descendant = |seq: &[llama_token]|  {
             let seq_id = self.trie.get_raw_descendant(&seq.to_vec())?
                 .iter()
