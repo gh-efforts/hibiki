@@ -75,7 +75,6 @@ impl <'a> SequenceSlots<'a> {
             }
 
             let raw_tokens = seq.input_tokens.iter().map(|t| t.0).collect::<Vec<_>>();
-            debug!("input tokens: {:?}", raw_tokens);
 
             match cache.get(&raw_tokens) {
                 None => {
