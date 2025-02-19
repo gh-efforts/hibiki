@@ -202,8 +202,11 @@ fn completions_handler(
 
     let mut sequence_slots = SequenceSlots::new(n_tasks, &mut batch, model);
 
-    let cache_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task));
+    let mut cache_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(kv_cache_size_pre_task))
+        .with_n_batch(0);
+
+    cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
 
     let mut cache_ctx = model.new_context(backend, cache_params)?;
     let mut trie_cache = RadixTrieKVCache::new(&mut cache_ctx, RAIDX_TRIE_KV_CACHE_MAX_SEQ);
