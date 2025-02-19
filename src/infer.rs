@@ -584,6 +584,7 @@ fn speculative_completions_target_handler(
     let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model, n_candidates);
 
     let mut cache_params = LlamaContextParams::default()
+        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32 * kv_cache_size_pre_task))
         .with_n_batch(0);
 
@@ -975,6 +976,7 @@ fn speculative_completions_draft_handler(
     let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
 
     let mut cache_params = LlamaContextParams::default()
+        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task))
         .with_n_batch(0);
 
