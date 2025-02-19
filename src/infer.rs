@@ -88,8 +88,8 @@ impl <'a> SequenceSlots<'a> {
 
                     unsafe {
                         let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), i as i32);
-                        ctx.clear_kv_cache_seq(Some(i as u32), Some(sub_seq_len as u32), None)?;
                         ensure!(res != 0);
+                        ctx.clear_kv_cache_seq(Some(i as u32), Some(sub_seq_len as u32), None)?;
                     }
 
                     for pos in sub_seq_len..seq.input_tokens.len() {
@@ -205,7 +205,7 @@ fn completions_handler(
 
     let mut cache_params = LlamaContextParams::default()
         .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task))
-        .with_n_batch(1);
+        .with_n_batch(0);
 
     cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
 
@@ -419,6 +419,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                         unsafe {
                                             let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), id as i32);
                                             ensure!(res != 0);
+                                            ctx.clear_kv_cache_seq(Some(id as u32), Some(sub_seq_len as u32), None)?;
                                         }
 
                                         for i in sub_seq_len..token_list.len() - 1 {
@@ -566,18 +567,23 @@ fn speculative_completions_target_handler(
     n_candidates: usize,
     _is_cancel: &AtomicBool
 ) -> Result<()> {
-    let ctx_params = LlamaContextParams::default()
+    let mut ctx_params = LlamaContextParams::default()
         .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
+    ctx_params.context_params.n_seq_max = n_tasks;
+
     let mut ctx = model.new_context(backend, ctx_params)?;
-    let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
 
     let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model, n_candidates);
 
-    let cache_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task));
+    let mut cache_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32 * kv_cache_size_pre_task))
+        .with_n_batch(0);
+
+    cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
 
     let mut cache_ctx = model.new_context(backend, cache_params)?;
     let mut trie_cache = RadixTrieKVCache::new(&mut cache_ctx, RAIDX_TRIE_KV_CACHE_MAX_SEQ);
@@ -802,6 +808,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                         unsafe {
                                             let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), seq_id as i32);
                                             ensure!(res != 0);
+                                            ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(sub_seq_len as u32), None)?;
                                         }
 
                                         for i in sub_seq_len..seq.confirmed_tokens.len() - 1 {
@@ -951,18 +958,23 @@ fn speculative_completions_draft_handler(
     kv_cache_size_pre_task: u32,
     max_unconfirmed_tokens: usize
 ) -> Result<()> {
-    let ctx_params = LlamaContextParams::default()
+    let mut ctx_params = LlamaContextParams::default()
         .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
+    ctx_params.context_params.n_seq_max = n_tasks;
+
     let mut ctx = model.new_context(backend, ctx_params)?;
-    let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
 
     let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
 
-    let cache_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32 * kv_cache_size_pre_task));
+    let mut cache_params = LlamaContextParams::default()
+        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task))
+        .with_n_batch(0);
+
+    cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
 
     let mut cache_ctx = model.new_context(backend, cache_params)?;
     let mut trie_cache = RadixTrieKVCache::new(&mut cache_ctx, RAIDX_TRIE_KV_CACHE_MAX_SEQ);
