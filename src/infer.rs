@@ -180,7 +180,7 @@ impl <'a> SequenceSlots<'a> {
     }
 }
 
-const RAIDX_TRIE_KV_CACHE_MAX_SEQ: usize = 64;
+const RAIDX_TRIE_KV_CACHE_MAX_SEQ: usize = 4;
 
 fn completions_handler(
     model: &LlamaModel,
