@@ -56,7 +56,6 @@ impl <'a, 'b: 'a> RadixTrieKVCache<'a, 'b> {
 
         unsafe {
             self.ctx.clear_kv_cache_seq(Some(self.seq_ids.len() as u32 - 1), None, None).unwrap();
-            self.ctx.kv_cache_update();
             self.ctx.copy_kv_cache_seq(seq_id, self.seq_ids.len() as i32 - 1, None, Some(sub_pos as u32)).unwrap();
             self.ctx.kv_cache_update();
             let state_size = llama_cpp_sys_2::llama_state_seq_get_size(self.ctx.context.as_ptr(), self.seq_ids.len() as i32 - 1);
