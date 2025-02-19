@@ -813,7 +813,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                         unsafe {
                                             let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), seq_id as i32);
                                             ensure!(res != 0);
-                                            ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(sub_seq_len as u32), None)?;
+                                            ensure!(ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(sub_seq_len as u32), None)?);
                                         }
 
                                         for i in sub_seq_len..seq.confirmed_tokens.len() - 1 {
