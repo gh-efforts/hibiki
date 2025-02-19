@@ -190,13 +190,15 @@ fn completions_handler(
     kv_cache_size_pre_task: u32,
     is_cancel: &AtomicBool
 ) -> Result<()> {
-    let ctx_params = LlamaContextParams::default()
+    let mut ctx_params = LlamaContextParams::default()
         .with_offload_kqv(!*OFF_OFFLOAD_KQV)
-        .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
+        .with_n_ctx(NonZeroU32::new(kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
+    ctx_params.context_params.n_seq_max = n_tasks;
+
     let mut ctx = model.new_context(backend, ctx_params)?;
-    let mut batch = LlamaBatch::new((n_tasks * kv_cache_size_pre_task) as usize, 1);
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
 
     let mut sequence_slots = SequenceSlots::new(n_tasks, &mut batch, model);
 
