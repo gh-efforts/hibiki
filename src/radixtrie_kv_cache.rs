@@ -17,9 +17,8 @@ impl <'a, 'b: 'a> RadixTrieKVCache<'a, 'b> {
         RadixTrieKVCache {
             trie: Trie::new(),
             seq_ids: {
-                let mut seq_ids = Vec::with_capacity(seq_len - 1);
-                // last sequence is used for copy
-                for _ in 0..seq_len - 1 {
+                let mut seq_ids = Vec::with_capacity(seq_len);
+                for _ in 0..seq_len {
                     seq_ids.push(None);
                 }
                 seq_ids
@@ -28,7 +27,7 @@ impl <'a, 'b: 'a> RadixTrieKVCache<'a, 'b> {
         }
     }
 
-    pub fn get(&mut self, seq: &[llama_token]) -> Option<(Vec<u8>, usize)> {
+    pub fn get(&self, seq: &[llama_token]) -> Option<(Vec<u8>, usize)> {
         let get_descendant = |seq: &[llama_token]|  {
             let seq_id = self.trie.get_raw_descendant(&seq.to_vec())?
                 .iter()
@@ -55,17 +54,14 @@ impl <'a, 'b: 'a> RadixTrieKVCache<'a, 'b> {
         access_time.store(Utc::now().timestamp(), Ordering::Relaxed);
 
         unsafe {
-            self.ctx.clear_kv_cache_seq(Some(self.seq_ids.len() as u32 - 1), None, None).unwrap();
-            self.ctx.copy_kv_cache_seq(seq_id, self.seq_ids.len() as i32 - 1, None, Some(sub_pos as u32)).unwrap();
-            self.ctx.kv_cache_update();
-            let state_size = llama_cpp_sys_2::llama_state_seq_get_size(self.ctx.context.as_ptr(), self.seq_ids.len() as i32 - 1);
+            let state_size = llama_cpp_sys_2::llama_state_seq_get_size(self.ctx.context.as_ptr(), seq_id);
             let mut state_data = vec![0u8; state_size];
 
             llama_cpp_sys_2::llama_state_seq_get_data(
                 self.ctx.context.as_ptr(),
                 state_data.as_mut_ptr(),
                 state_size,
-                self.seq_ids.len() as i32 - 1
+                seq_id
             );
 
             Some((state_data, sub_pos))
