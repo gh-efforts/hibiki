@@ -424,7 +424,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                             ctx.clear_kv_cache_seq(Some(id as u32), Some(sub_seq_len as u32), None)?;
                                         }
 
-                                        if sub_seq_len < token_list.len() - 1 {
+                                        if sub_seq_len == token_list.len() - 1 {
                                             continue;
                                         }
 
