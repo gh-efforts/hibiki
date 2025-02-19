@@ -88,6 +88,7 @@ impl <'a> SequenceSlots<'a> {
 
                     unsafe {
                         let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), i as i32);
+                        ctx.clear_kv_cache_seq(Some(i as u32), Some(sub_seq_len as u32), None)?;
                         ensure!(res != 0);
                     }
 
