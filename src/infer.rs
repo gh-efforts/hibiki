@@ -89,7 +89,6 @@ impl <'a> SequenceSlots<'a> {
                     unsafe {
                         let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), i as i32);
                         ensure!(res != 0);
-                        ctx.clear_kv_cache_seq(Some(i as u32), Some(sub_seq_len as u32), None)?;
                     }
 
                     for pos in sub_seq_len..seq.input_tokens.len() {
@@ -421,7 +420,6 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                                         unsafe {
                                             let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), id as i32);
                                             ensure!(res != 0);
-                                            ctx.clear_kv_cache_seq(Some(id as u32), Some(sub_seq_len as u32), None)?;
                                         }
 
                                         if sub_seq_len == token_list.len() - 1 {
@@ -813,7 +811,6 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                                         unsafe {
                                             let res = llama_cpp_sys_2::llama_state_seq_set_data(ctx.context.as_ptr(), sub_seq_data.as_ptr(), sub_seq_data.len(), seq_id as i32);
                                             ensure!(res != 0);
-                                            ctx.clear_kv_cache_seq(Some(seq_id as u32), Some(sub_seq_len as u32), None)?;
                                         }
 
                                         for i in sub_seq_len..seq.confirmed_tokens.len() - 1 {
