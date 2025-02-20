@@ -192,6 +192,7 @@ fn completions_handler(
     is_cancel: &AtomicBool
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
+        .with_flash_attention(true)
         .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
@@ -571,6 +572,7 @@ fn speculative_completions_target_handler(
     _is_cancel: &AtomicBool
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
+        .with_flash_attention(true)
         .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
@@ -954,6 +956,7 @@ fn speculative_completions_draft_handler(
     max_unconfirmed_tokens: usize
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
+        .with_flash_attention(true)
         .with_offload_kqv(!*OFF_OFFLOAD_KQV)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
