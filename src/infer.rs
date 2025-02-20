@@ -199,7 +199,9 @@ fn completions_handler(
     ctx_params.context_params.n_seq_max = n_tasks;
 
     if let Ok(kv_type) = std::env::var("GGML_KV_TYPE") {
-        ctx_params.context_params.type_k = ggml_type::from_str(&kv_type)?;
+        let ggml_type = ggml_type::from_str(&kv_type)?;
+        ctx_params.context_params.type_k = ggml_type;
+        ctx_params.context_params.type_v = ggml_type;
     };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
