@@ -125,7 +125,7 @@ impl <'a> SequenceSlots<'a> {
                         llama_cpp_sys_2::llama_state_seq_get_data(ctx.context.as_ptr(), data.as_mut_ptr(), data_size, i as i32);
 
                         let raw_input_tokens = seq.input_tokens.iter().map(|t| t.0).collect::<Vec<_>>();
-                        cache.insert(raw_input_tokens, &data)?;
+                        cache.insert(raw_input_tokens, data)?;
                     }
                 }
             }
@@ -180,7 +180,7 @@ impl <'a> SequenceSlots<'a> {
     }
 }
 
-const RAIDX_TRIE_KV_CACHE_MAX_SEQ: usize = 4;
+const RAIDX_TRIE_KV_CACHE_MAX_SEQ: usize = 64;
 
 fn completions_handler(
     model: &LlamaModel,
@@ -201,15 +201,7 @@ fn completions_handler(
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
 
     let mut sequence_slots = SequenceSlots::new(n_tasks, &mut batch, model);
-
-    let mut cache_params = LlamaContextParams::default()
-        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task))
-        .with_n_batch(0);
-
-    cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
-
-    let mut cache_ctx = model.new_context(backend, cache_params)?;
-    let mut trie_cache = RadixTrieKVCache::new(&mut cache_ctx, RAIDX_TRIE_KV_CACHE_MAX_SEQ);
+    let mut trie_cache = RadixTrieKVCache::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ);
 
     loop {
         if sequence_slots.len() == 0 {
@@ -485,7 +477,7 @@ impl <'a> SpeculativeCompletionsTargetSequenceSlots<'a> {
                 llama_cpp_sys_2::llama_state_seq_get_data(ctx.context.as_ptr(), data.as_mut_ptr(), data_size, seq_id as i32);
 
                 let raw_input_tokens = seq.prompt_token_list[0..seq.prompt_token_list.len() - 1].iter().map(|t| t.0).collect::<Vec<_>>();
-                cache.insert(raw_input_tokens, &data)?;
+                cache.insert(raw_input_tokens, data)?;
             }
         }
 
@@ -582,16 +574,7 @@ fn speculative_completions_target_handler(
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
 
     let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model, n_candidates);
-
-    let mut cache_params = LlamaContextParams::default()
-        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
-        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32 * kv_cache_size_pre_task))
-        .with_n_batch(0);
-
-    cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
-
-    let mut cache_ctx = model.new_context(backend, cache_params)?;
-    let mut trie_cache = RadixTrieKVCache::new(&mut cache_ctx, RAIDX_TRIE_KV_CACHE_MAX_SEQ);
+    let mut trie_cache = RadixTrieKVCache::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ);
 
     let select_tmp = RefCell::new(None);
     loop {
@@ -938,7 +921,7 @@ impl <'a> SpeculativeCompletionsDraftSequenceSlots<'a> {
                         llama_cpp_sys_2::llama_state_seq_get_data(ctx.context.as_ptr(), data.as_mut_ptr(), data_size, seq_id as i32);
 
                         let raw_input_tokens = seq.confirmed_tokens.iter().map(|t| t.0).collect::<Vec<_>>();
-                        cache.insert(raw_input_tokens, &data)?;
+                        cache.insert(raw_input_tokens, data)?;
                     }
                 }
 
@@ -974,16 +957,7 @@ fn speculative_completions_draft_handler(
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
 
     let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
-
-    let mut cache_params = LlamaContextParams::default()
-        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
-        .with_n_ctx(NonZeroU32::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32* kv_cache_size_pre_task))
-        .with_n_batch(0);
-
-    cache_params.context_params.n_seq_max = RAIDX_TRIE_KV_CACHE_MAX_SEQ as u32;
-
-    let mut cache_ctx = model.new_context(backend, cache_params)?;
-    let mut trie_cache = RadixTrieKVCache::new(&mut cache_ctx, RAIDX_TRIE_KV_CACHE_MAX_SEQ);
+    let mut trie_cache = RadixTrieKVCache::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ);
 
     let select_task = RefCell::new(None);
 
