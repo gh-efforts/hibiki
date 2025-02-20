@@ -73,51 +73,51 @@ pub fn get_metadata_raw(model: &LlamaModel, key: &str) -> String {
 
 pub struct ModelMetadata {
     /// The size of this model's vocabulary, in tokens.
-    vocabulary_size: usize,
+    pub vocabulary_size: usize,
 
     /// The beginning of sentence (BOS) token for this model.
-    bos_token: LlamaToken,
+    pub bos_token: LlamaToken,
 
     /// The end of sentence (EOS) token for this model.
-    eos_token: LlamaToken,
+    pub eos_token: LlamaToken,
 
     /// The newline (NL) token for this model.
-    nl_token: LlamaToken,
+    pub nl_token: LlamaToken,
 
-    /// For infilling, the prefix token for this model.
-    infill_prefix_token: LlamaToken,
-
-    /// For infilling, the middle token for this model.
-    infill_middle_token: LlamaToken,
-
-    /// For infilling, the suffix token for this model.
-    infill_suffix_token: LlamaToken,
-
-    /// For infilling, the token for the end of the infill.
-    eot_token: LlamaToken,
+    // /// For infilling, the prefix token for this model.
+    // infill_prefix_token: LlamaToken,
+    //
+    // /// For infilling, the middle token for this model.
+    // infill_middle_token: LlamaToken,
+    //
+    // /// For infilling, the suffix token for this model.
+    // infill_suffix_token: LlamaToken,
+    //
+    // /// For infilling, the token for the end of the infill.
+    // eot_token: LlamaToken,
 
     /// For embeddings, the length of a single embeddings vector.
-    embedding_length: usize,
+    pub embedding_length: usize,
 
     /// The number of tokens in the context the model was trained with.
-    training_size: usize,
+    pub training_size: usize,
 
     /// The number of layers in the model's network.
-    layers: usize,
+    pub layers: usize,
 
     /// ???
-    kv_heads: usize,
+    pub kv_heads: usize,
     /// Dimension of keys (d_k). d_q is assumed to be the same, but there are n_head q heads, and only n_head_kv k-v heads
-    k_attention: usize,
+    pub k_attention: usize,
     /// Dimension of values (d_v) aka n_embd_head
-    v_attention: usize,
+    pub v_attention: usize,
 
     /// State Space Models conv kernel
-    ssm_d_conv: usize,
+    pub ssm_d_conv: usize,
     /// State Space Models inner size
-    ssm_d_inner: usize,
+    pub ssm_d_inner: usize,
     /// State Space Models state size
-    ssm_d_state: usize,
+    pub ssm_d_state: usize,
 }
 
 impl TryFrom<&LlamaModel> for ModelMetadata {
@@ -125,10 +125,7 @@ impl TryFrom<&LlamaModel> for ModelMetadata {
 
     fn try_from(model: &LlamaModel) -> Result<Self, Self::Error> {
         let vocabulary_size = model.n_vocab();
-
-        let n_embd = unsafe { llama_cpp_sys_2::llama_n_embd(model.as_ptr()) } as usize;
-
-        // Lots of redundant fetches here because llama.cpp doesn't expose any of this directly
+        let n_embd = model.n_embd() as usize;
 
         let heads = get_metadata_raw(model, "%s.attention.head_count")
             .parse::<usize>()
@@ -155,7 +152,24 @@ impl TryFrom<&LlamaModel> for ModelMetadata {
         let ssm_d_state = get_metadata_raw(model, "%s.ssm.state_size")
             .parse::<usize>()
             .unwrap_or(0);
-        todo!()
+
+        let out = ModelMetadata {
+            vocabulary_size: vocabulary_size as usize,
+            bos_token: model.token_bos(),
+            eos_token: model.token_eos(),
+            nl_token: model.token_nl(),
+            embedding_length: n_embd,
+            training_size: model.n_ctx_train() as usize,
+            layers,
+            kv_heads,
+            k_attention,
+            v_attention,
+            ssm_d_conv,
+            ssm_d_inner,
+            ssm_d_state,
+        };
+
+        Ok(out)
     }
 }
 

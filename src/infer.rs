@@ -8,13 +8,14 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::{LlamaModel};
 use llama_cpp_2::token::LlamaToken;
-use llama_cpp_sys_2::hibiki_common_speculative_are_compatible;
+use llama_cpp_sys_2::{ggml_type, hibiki_common_speculative_are_compatible};
 use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap};
 use std::num::NonZeroU32;
 use std::ptr::slice_from_raw_parts;
 use std::rc::Rc;
+use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::Poll;
@@ -196,6 +197,10 @@ fn completions_handler(
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
     ctx_params.context_params.n_seq_max = n_tasks;
+
+    if let Ok(kv_type) = std::env::var("GGML_KV_TYPE") {
+        ctx_params.context_params.type_k = ggml_type::from_str(&kv_type)?;
+    };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
