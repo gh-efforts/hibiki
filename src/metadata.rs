@@ -180,18 +180,12 @@ impl From<&LlamaModel> for ModelMetadata {
 /// [`LlamaModel::estimate_embeddings_session_size`] as an estimation of memory usage.
 #[derive(Debug)]
 pub struct ResourceUsage {
-    /// The host memory required, in bytes.
-    pub host_memory: usize,
-
-    /// The device memory required, in bytes.
-    ///
-    /// The device depends on features used to build this crate, as well as the main gpu selected during model creation.
-    ///
-    /// If the device is the CPU, this is additional host memory required.
-    pub device_memory: usize,
+    kv_cache: usize
 }
 
 impl ModelMetadata {
+    // TODO while llama doesn't offer memory estimation utilities, this is the best that can be done realistically
+    // https://github.com/ggerganov/llama.cpp/issues/4315
     pub fn estimate_session_size(&self, session_params: &LlamaContextParams) -> ResourceUsage {
         let kv_size = session_params.n_ctx().unwrap().get() as i64; // TODO exception for mamba arch
 
@@ -225,15 +219,15 @@ impl ModelMetadata {
         let cache_size = self.layers * (k_row_size + v_row_size);
         info!("KV cache size: {}MB", cache_size / 1024 / 1024);
 
-        let batch = min(session_params.n_ctx().unwrap().get(), session_params.n_batch()) as usize;
-        let logits_size = self.vocabulary_size * batch;
-        let embed_size = if session_params.embeddings() {
-            self.embedding_length * batch
-        } else {
-            0
-        };
-        let output_size = (logits_size + embed_size) * size_of::<f32>();
-        info!("Output buffer size: {}MB", output_size / 1024 / 1024);
+        // let batch = min(session_params.n_ctx().unwrap().get(), session_params.n_batch()) as usize;
+        // let logits_size = self.vocabulary_size * batch;
+        // let embed_size = if session_params.embeddings() {
+        //     self.embedding_length * batch
+        // } else {
+        //     0
+        // };
+        // let output_size = (logits_size + embed_size) * size_of::<f32>();
+        // info!("Output buffer size: {}MB", output_size / 1024 / 1024);
 
         // const LLAMA_MAX_NODES: usize = 8192;
         //
@@ -243,10 +237,7 @@ impl ModelMetadata {
         // };
 
         ResourceUsage {
-            host_memory: output_size,
-            // TODO while llama doesn't offer memory estimation utilities, this is the best that can be done realistically
-            // https://github.com/ggerganov/llama.cpp/issues/4315
-            device_memory: cache_size + output_size,
+            kv_cache: cache_size
         }
     }
 }
