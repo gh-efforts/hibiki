@@ -1,5 +1,5 @@
 use crate::sampler::Sampler;
-use crate::CompletionsTask;
+use crate::{CompletionsTask, KVCacheTypes};
 use anyhow::{anyhow, ensure, Result};
 use flume::{RecvTimeoutError, TryRecvError};
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -15,16 +15,11 @@ use std::collections::{BTreeMap};
 use std::num::NonZeroU32;
 use std::ptr::slice_from_raw_parts;
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 use crate::radixtrie_kv_cache::RadixTrieKVCache;
-
-static OFF_OFFLOAD_KQV: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
-    std::env::var("HIBIKI_OFF_OFFLOAD_KQV").is_ok()
-});
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 enum SeqState {
@@ -189,20 +184,25 @@ fn completions_handler(
     task_rx: &flume::Receiver<CompletionsTask>,
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
-    is_cancel: &AtomicBool
+    offload_kqv: bool,
+    type_k: Option<KVCacheTypes>,
+    type_v: Option<KVCacheTypes>,
+    is_cancel: &AtomicBool,
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
         .with_flash_attention(true)
-        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
+        .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
     ctx_params.context_params.n_seq_max = n_tasks;
 
-    if let Ok(kv_type) = std::env::var("GGML_KV_TYPE") {
-        let ggml_type = ggml_type::from_str(&kv_type)?;
-        ctx_params.context_params.type_k = ggml_type;
-        ctx_params.context_params.type_v = ggml_type;
+    if let Some(type_k) = type_k {
+        ctx_params.context_params.type_k = type_k as ggml_type;
+    };
+
+    if let Some(type_v) = type_v {
+        ctx_params.context_params.type_v = type_v as ggml_type;
     };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
@@ -569,15 +569,26 @@ fn speculative_completions_target_handler(
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
     n_candidates: usize,
+    offload_kqv: bool,
+    type_k: Option<KVCacheTypes>,
+    type_v: Option<KVCacheTypes>,
     _is_cancel: &AtomicBool
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
         .with_flash_attention(true)
-        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
+        .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
     ctx_params.context_params.n_seq_max = n_tasks;
+
+    if let Some(type_k) = type_k {
+        ctx_params.context_params.type_k = type_k as ggml_type;
+    };
+
+    if let Some(type_v) = type_v {
+        ctx_params.context_params.type_v = type_v as ggml_type;
+    };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
@@ -953,15 +964,26 @@ fn speculative_completions_draft_handler(
     task_rx: &flume::Receiver<CompletionsTask>,
     n_tasks: u32,
     kv_cache_size_pre_task: u32,
-    max_unconfirmed_tokens: usize
+    max_unconfirmed_tokens: usize,
+    offload_kqv: bool,
+    type_k: Option<KVCacheTypes>,
+    type_v: Option<KVCacheTypes>,
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
         .with_flash_attention(true)
-        .with_offload_kqv(!*OFF_OFFLOAD_KQV)
+        .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
     ctx_params.context_params.n_seq_max = n_tasks;
+
+    if let Some(type_k) = type_k {
+        ctx_params.context_params.type_k = type_k as ggml_type;
+    };
+
+    if let Some(type_v) = type_v {
+        ctx_params.context_params.type_v = type_v as ggml_type;
+    };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
@@ -1085,7 +1107,12 @@ pub async fn run(
     kv_cache_size_pre_task: u32,
     n_tasks: u32,
     max_unconfirmed_tokens: usize,
-    n_candidates: usize
+    n_candidates: usize,
+    offload_kqv: bool,
+    type_k: Option<KVCacheTypes>,
+    type_v: Option<KVCacheTypes>,
+    draft_type_k: Option<KVCacheTypes>,
+    draft_type_v: Option<KVCacheTypes>
 ) -> Result<()> {
     let is_cancel = Arc::new(AtomicBool::new(false));
 
@@ -1101,6 +1128,9 @@ pub async fn run(
                     &task_rx,
                     n_tasks,
                     kv_cache_size_pre_task,
+                    offload_kqv,
+                    type_k,
+                    type_v,
                     &*is_cancel
                 )
             }).await?
@@ -1128,6 +1158,9 @@ pub async fn run(
                         n_tasks,
                         kv_cache_size_pre_task,
                         n_candidates,
+                        offload_kqv,
+                        type_k,
+                        type_v,
                         &*is_cancel,
                     )
                 }
@@ -1141,7 +1174,10 @@ pub async fn run(
                     &task_rx,
                     n_tasks,
                     kv_cache_size_pre_task,
-                    max_unconfirmed_tokens
+                    max_unconfirmed_tokens,
+                    offload_kqv,
+                    draft_type_k,
+                    draft_type_v,
                 )
             });
 

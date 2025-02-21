@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
-use llama_cpp_sys_2::{ggml_backend_dev_t, ggml_backend_device_register, ggml_backend_reg_by_name, ggml_backend_reg_get_proc_address, LLAMA_SPLIT_MODE_LAYER, LLAMA_SPLIT_MODE_ROW};
+use llama_cpp_sys_2::{ggml_backend_dev_t, ggml_backend_device_register, ggml_backend_reg_by_name, ggml_backend_reg_get_proc_address, llama_split_mode, GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, LLAMA_SPLIT_MODE_LAYER, LLAMA_SPLIT_MODE_ROW};
 
 mod api;
 mod infer;
@@ -39,8 +39,22 @@ struct CompletionsTask {
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
 enum SplitMode {
-    Layer,
-    Row
+    Layer = 1,
+    Row = 2
+}
+
+#[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
+#[allow(non_camel_case_types)]
+enum KVCacheTypes {
+    F32 = GGML_TYPE_F32 as isize,
+    F16 = GGML_TYPE_F16 as isize,
+    BF16 = GGML_TYPE_BF16 as isize,
+    Q8_0 = GGML_TYPE_Q8_0 as isize,
+    Q4_0 = GGML_TYPE_Q4_0 as isize,
+    Q4_1 = GGML_TYPE_Q4_1 as isize,
+    IQ4_NL = GGML_TYPE_IQ4_NL as isize,
+    Q5_0 = GGML_TYPE_Q5_0 as isize,
+    Q5_1 = GGML_TYPE_Q5_1 as isize,
 }
 
 #[derive(Parser)]
@@ -90,6 +104,21 @@ struct Args {
 
     #[arg(long, default_value_t = 16)]
     n_candidates: usize,
+
+    #[arg(long, default_value_t = true)]
+    offload_kqv: bool,
+
+    #[arg(long)]
+    type_k: Option<KVCacheTypes>,
+
+    #[arg(long)]
+    type_v: Option<KVCacheTypes>,
+
+    #[arg(long)]
+    draft_type_k: Option<KVCacheTypes>,
+
+    #[arg(long)]
+    draft_type_v: Option<KVCacheTypes>
 }
 
 fn logger_init() -> Result<()> {
@@ -174,10 +203,7 @@ fn exec(args: Args) -> Result<()> {
     }
 
     if let Some(split_mode) = args.split_mode {
-        model_params.params.split_mode = match split_mode {
-            SplitMode::Layer => LLAMA_SPLIT_MODE_LAYER,
-            SplitMode::Row => LLAMA_SPLIT_MODE_ROW
-        };
+        model_params.params.split_mode = split_mode as llama_split_mode;
     }
 
     if let Some(split) = &args.model_tensor_split_rate {
@@ -200,10 +226,7 @@ fn exec(args: Args) -> Result<()> {
         }
 
         if let Some(split_mode) = args.split_mode {
-            draft_model_params.params.split_mode = match split_mode {
-                SplitMode::Layer => LLAMA_SPLIT_MODE_LAYER,
-                SplitMode::Row => LLAMA_SPLIT_MODE_ROW
-            };
+            draft_model_params.params.split_mode = split_mode as llama_split_mode;
         }
 
         if let Some(split) = &args.draft_model_tensor_split_rate {
@@ -232,6 +255,11 @@ fn exec(args: Args) -> Result<()> {
             args.parallel_tasks,
             args.max_unconfirmed_tokens,
             args.n_candidates,
+            args.offload_kqv,
+            args.type_k,
+            args.type_v,
+            args.draft_type_k,
+            args.draft_type_v
         );
 
         let api_handle = api::run(
