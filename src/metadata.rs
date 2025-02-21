@@ -211,7 +211,7 @@ impl ModelMetadata {
         };
         let v_row_size = unsafe {
             ggml_row_size(
-                session_params.context_params.type_k.into(),
+                session_params.context_params.type_v.into(),
                 (n_embd_v_gqa + n_embd_v_s) as i64 * kv_size,
             )
         };
