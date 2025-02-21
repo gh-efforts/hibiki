@@ -46,7 +46,6 @@ enum SplitMode {
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
 #[allow(non_camel_case_types)]
 enum KVCacheTypes {
-    I8 = GGML_TYPE_I8 as isize,
     F32 = GGML_TYPE_F32 as isize,
     F16 = GGML_TYPE_F16 as isize,
     BF16 = GGML_TYPE_BF16 as isize,
