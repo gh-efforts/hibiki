@@ -105,8 +105,8 @@ struct Args {
     #[arg(long, default_value_t = 16)]
     n_candidates: usize,
 
-    #[arg(long, default_value_t = true)]
-    offload_kqv: bool,
+    #[arg(long, default_value_t = false)]
+    disable_offload_kqv: bool,
 
     #[arg(long)]
     type_k: Option<KVCacheTypes>,
@@ -255,7 +255,7 @@ fn exec(args: Args) -> Result<()> {
             args.parallel_tasks,
             args.max_unconfirmed_tokens,
             args.n_candidates,
-            args.offload_kqv,
+            !args.disable_offload_kqv,
             args.type_k,
             args.type_v,
             args.draft_type_k,
