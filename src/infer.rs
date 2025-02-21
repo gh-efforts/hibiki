@@ -19,6 +19,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
+use crate::metadata::ModelMetadata;
 use crate::radixtrie_kv_cache::RadixTrieKVCache;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -189,6 +190,8 @@ fn completions_handler(
     type_v: Option<KVCacheTypes>,
     is_cancel: &AtomicBool,
 ) -> Result<()> {
+    let model_metadata = ModelMetadata::from(model);
+
     let mut ctx_params = LlamaContextParams::default()
         .with_flash_attention(true)
         .with_offload_kqv(offload_kqv)
@@ -204,6 +207,8 @@ fn completions_handler(
     if let Some(type_v) = type_v {
         ctx_params.context_params.type_v = type_v as ggml_type;
     };
+
+    model_metadata.estimate_session_size(&ctx_params);
 
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);

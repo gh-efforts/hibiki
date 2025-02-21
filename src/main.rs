@@ -1,23 +1,23 @@
 #[macro_use]
 extern crate log;
 
-use std::ffi::{CString};
 use anyhow::{anyhow, Result};
 use clap::{Parser, ValueEnum};
 use llama_cpp_2::llama_backend;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::token::LlamaToken;
+use llama_cpp_sys_2::{ggml_backend_dev_t, ggml_backend_device_register, ggml_backend_reg_by_name, ggml_backend_reg_get_proc_address, llama_split_mode, GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0};
 use log::LevelFilter;
 use log4rs::append::console::ConsoleAppender;
 use log4rs::config::{Appender, Root};
 use log4rs::encode::pattern::PatternEncoder;
+use std::ffi::CString;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
-use llama_cpp_sys_2::{ggml_backend_dev_t, ggml_backend_device_register, ggml_backend_reg_by_name, ggml_backend_reg_get_proc_address, llama_split_mode, GGML_TYPE_BF16, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_IQ4_NL, GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0, LLAMA_SPLIT_MODE_LAYER, LLAMA_SPLIT_MODE_ROW};
 
 mod api;
 mod infer;

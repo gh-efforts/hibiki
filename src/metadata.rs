@@ -1,6 +1,9 @@
+use std::cmp::min;
 use std::ffi::{c_char, CStr, CString};
+use llama_cpp_2::context::params::LlamaContextParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::token::LlamaToken;
+use llama_cpp_sys_2::ggml_row_size;
 
 // Retrieves a value in string form from a model's metadata.
 ///
@@ -120,10 +123,8 @@ pub struct ModelMetadata {
     pub ssm_d_state: usize,
 }
 
-impl TryFrom<&LlamaModel> for ModelMetadata {
-    type Error = ();
-
-    fn try_from(model: &LlamaModel) -> Result<Self, Self::Error> {
+impl From<&LlamaModel> for ModelMetadata {
+    fn from(model: &LlamaModel) -> Self {
         let vocabulary_size = model.n_vocab();
         let n_embd = model.n_embd() as usize;
 
@@ -169,7 +170,84 @@ impl TryFrom<&LlamaModel> for ModelMetadata {
             ssm_d_state,
         };
 
-        Ok(out)
+        out
+    }
+}
+
+/// Memory requirements for something.
+///
+/// This is typically returned by [`LlamaModel::estimate_session_size`] and
+/// [`LlamaModel::estimate_embeddings_session_size`] as an estimation of memory usage.
+#[derive(Debug)]
+pub struct ResourceUsage {
+    /// The host memory required, in bytes.
+    pub host_memory: usize,
+
+    /// The device memory required, in bytes.
+    ///
+    /// The device depends on features used to build this crate, as well as the main gpu selected during model creation.
+    ///
+    /// If the device is the CPU, this is additional host memory required.
+    pub device_memory: usize,
+}
+
+impl ModelMetadata {
+    pub fn estimate_session_size(&self, session_params: &LlamaContextParams) -> ResourceUsage {
+        let kv_size = session_params.n_ctx().unwrap().get() as i64; // TODO exception for mamba arch
+
+        // dimension of key embeddings across all k-v heads
+        let n_embd_k_gqa = self.k_attention * self.kv_heads;
+        // dimension of value embeddings across all k-v heads
+        let n_embd_v_gqa = self.v_attention * self.kv_heads;
+
+        // dimension of the rolling state embeddings
+        let n_embd_k_s = if self.ssm_d_conv > 0 {
+            (self.ssm_d_conv - 1) * self.ssm_d_inner
+        } else {
+            0
+        };
+        // dimension of the recurrent state embeddings
+        let n_embd_v_s = self.ssm_d_state * self.ssm_d_inner;
+
+        let k_row_size = unsafe {
+            ggml_row_size(
+                session_params.context_params.type_k.into(),
+                (n_embd_k_gqa + n_embd_k_s) as i64 * kv_size,
+            )
+        };
+        let v_row_size = unsafe {
+            ggml_row_size(
+                session_params.context_params.type_k.into(),
+                (n_embd_v_gqa + n_embd_v_s) as i64 * kv_size,
+            )
+        };
+
+        let cache_size = self.layers * (k_row_size + v_row_size);
+        info!("KV cache size: {}MB", cache_size / 1024 / 1024);
+
+        let batch = min(session_params.n_ctx().unwrap().get(), session_params.n_batch()) as usize;
+        let logits_size = self.vocabulary_size * batch;
+        let embed_size = if session_params.embeddings() {
+            self.embedding_length * batch
+        } else {
+            0
+        };
+        let output_size = (logits_size + embed_size) * size_of::<f32>();
+        info!("Output buffer size: {}MB", output_size / 1024 / 1024);
+
+        // const LLAMA_MAX_NODES: usize = 8192;
+        //
+        // let compute_size = unsafe {
+        //     ggml_tensor_overhead() * LLAMA_MAX_NODES
+        //         + ggml_graph_overhead_custom(LLAMA_MAX_NODES, false)
+        // };
+
+        ResourceUsage {
+            host_memory: output_size,
+            // TODO while llama doesn't offer memory estimation utilities, this is the best that can be done realistically
+            // https://github.com/ggerganov/llama.cpp/issues/4315
+            device_memory: cache_size + output_size,
+        }
     }
 }
 
