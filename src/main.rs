@@ -27,7 +27,7 @@ mod radixtrie_kv_cache;
 mod metadata;
 
 struct CompletionsTask {
-    from_api: flume::Sender<LlamaToken>,
+    to_api: flume::Sender<LlamaToken>,
     input_token_list: Vec<LlamaToken>,
     frequency_penalty: Option<f32>,
     presence_penalty: Option<f32>,
@@ -35,6 +35,11 @@ struct CompletionsTask {
     temperature: Option<f32>,
     top_p: Option<f32>,
     maximum_tokens: Option<u32>
+}
+
+struct EmbeddingTask {
+    to_api: flume::Sender<Vec<f32>>,
+    input_token_list: Vec<LlamaToken>
 }
 
 #[derive(Copy, Clone, Eq, PartialEq, ValueEnum)]
@@ -118,7 +123,10 @@ struct Args {
     draft_type_k: Option<KVCacheTypes>,
 
     #[arg(long)]
-    draft_type_v: Option<KVCacheTypes>
+    draft_type_v: Option<KVCacheTypes>,
+
+    #[arg(long, default_value_t = false)]
+    embedding: bool
 }
 
 fn logger_init() -> Result<()> {
@@ -243,35 +251,61 @@ fn exec(args: Args) -> Result<()> {
         None
     };
 
-    let (tx, rx) = flume::bounded(1024);
-
     rt.block_on(async {
-        let infer_handle = infer::run(
-            model.clone(),
-            draft_model,
-            backend,
-            rx,
-            args.kv_cache_size_pre_task,
-            args.parallel_tasks,
-            args.max_unconfirmed_tokens,
-            args.n_candidates,
-            !args.disable_offload_kqv,
-            args.type_k,
-            args.type_v,
-            args.draft_type_k,
-            args.draft_type_v
-        );
+        if args.embedding {
+            let (tx, rx) = flume::bounded(1024);
 
-        let api_handle = api::run(
-            args.bind_addr,
-            model,
-            args.model_name,
-            args.kv_cache_size_pre_task,
-            tx,
-            args.template
-        );
+            let infer_handle = infer::run_embedding(
+                model.clone(),
+                backend,
+                rx,
+                args.kv_cache_size_pre_task,
+                args.parallel_tasks,
+                !args.disable_offload_kqv,
+                args.type_k,
+                args.type_v,
+            );
 
-        tokio::try_join!(infer_handle, api_handle)?;
+            let api_handle = api::run_embedding(
+                args.bind_addr,
+                model,
+                args.model_name,
+                args.kv_cache_size_pre_task,
+                tx,
+            );
+
+            tokio::try_join!(infer_handle, api_handle)?;
+        } else {
+            let (tx, rx) = flume::bounded(1024);
+
+            let infer_handle = infer::run_completions(
+                model.clone(),
+                draft_model,
+                backend,
+                rx,
+                args.kv_cache_size_pre_task,
+                args.parallel_tasks,
+                args.max_unconfirmed_tokens,
+                args.n_candidates,
+                !args.disable_offload_kqv,
+                args.type_k,
+                args.type_v,
+                args.draft_type_k,
+                args.draft_type_v
+            );
+
+            let api_handle = api::run_completions(
+                args.bind_addr,
+                model,
+                args.model_name,
+                args.kv_cache_size_pre_task,
+                tx,
+                args.template
+            );
+
+            tokio::try_join!(infer_handle, api_handle)?;
+        }
+
         Ok(())
     })
 }

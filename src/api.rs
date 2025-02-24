@@ -1,7 +1,7 @@
 use std::ffi::{CStr, CString};
-use crate::CompletionsTask;
+use crate::{CompletionsTask, EmbeddingTask};
 use anyhow::{anyhow, ensure, Result};
-use async_openai::types::{ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, FinishReason, FunctionCall, Prompt, Role};
+use async_openai::types::{Base64Embedding, Base64EmbeddingVector, ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, CreateBase64EmbeddingResponse, CreateEmbeddingResponse, Embedding, EmbeddingInput, EmbeddingUsage, EncodingFormat, FinishReason, FunctionCall, Prompt, Role};
 use axum::body::Body;
 use axum::extract::State;
 use axum::response::{IntoResponse, Response, Sse};
@@ -15,6 +15,8 @@ use std::ptr::null;
 use std::sync::Arc;
 use std::time::Duration;
 use axum::http::StatusCode;
+use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use futures_util::StreamExt;
 use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatFormat, HibikiCommonChatParams, HibikiCommonChatTemplates};
 use serde::Deserialize;
@@ -129,12 +131,12 @@ fn output_parse(msg: &str, format: HibikiCommonChatFormat) -> Result<CommonChatM
     }
 }
 
-struct Context {
+struct Context<Task> {
     model: Arc<LlamaModel>,
     model_name: String,
-    backend_bridge: flume::Sender<CompletionsTask>,
+    backend_bridge: flume::Sender<Task>,
     kv_cache_size_pre_task: u32,
-    chat_template: Arc<ChatTemplates>,
+    chat_template: Option<Arc<ChatTemplates>>,
 }
 
 async fn completion_req_to_task(
@@ -151,7 +153,7 @@ async fn completion_req_to_task(
         };
 
         let task = CompletionsTask {
-            from_api: callback,
+            to_api: callback,
             maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
             frequency_penalty : req.frequency_penalty,
@@ -174,9 +176,9 @@ async fn tokens_to_string(
     }).await?
 }
 
-async fn send_to_backend(
-    task: CompletionsTask,
-    ctx: &Context
+async fn send_to_backend<Task: Send + Sync + 'static>(
+    task: Task,
+    ctx: &Context<Task>
 ) -> Result<()> {
     ctx.backend_bridge.send_async(task).await?;
     Ok(())
@@ -201,7 +203,7 @@ async fn chat_completion_req_to_task(
         let input_tokens = model.str_to_token(&prompt, AddBos::Always)?;
 
         let task = CompletionsTask {
-            from_api: callback,
+            to_api: callback,
             #[allow(deprecated)]
             maximum_tokens: req.max_tokens,
             input_token_list: input_tokens,
@@ -216,7 +218,7 @@ async fn chat_completion_req_to_task(
 }
 
 async fn v1_chat_completions(
-    State(ctx): State<Arc<Context>>,
+    State(ctx): State<Arc<Context<CompletionsTask>>>,
     Json(req): Json<async_openai::types::CreateChatCompletionRequest>
 ) -> Response {
     debug!("v1_chat_completions: {:?}", req);
@@ -230,7 +232,7 @@ async fn v1_chat_completions(
             ensure!(req.tools.is_none());
         }
 
-        let (task, format) = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.chat_template.clone()).await?;
+        let (task, format) = chat_completion_req_to_task(req, ctx.model.clone(), tx, ctx.chat_template.as_ref().unwrap().clone()).await?;
         debug!("chat_completion_req_to_task finished");
         let prompt_tokens = task.input_token_list.len() as u32;
         ensure!(prompt_tokens < ctx.kv_cache_size_pre_task, "Prompt too large");
@@ -390,7 +392,7 @@ async fn v1_chat_completions(
 }
 
 async fn v1_completions(
-    State(ctx): State<Arc<Context>>,
+    State(ctx): State<Arc<Context<CompletionsTask>>>,
     Json(req): Json<async_openai::types::CreateCompletionRequest>
 ) -> Response {
     debug!("v1_completions: {:?}", req);
@@ -498,7 +500,134 @@ async fn v1_completions(
     }
 }
 
-pub async fn run(
+async fn embedding_req_to_task(
+    req: async_openai::types::CreateEmbeddingRequest,
+    model: Arc<LlamaModel>,
+    callback: flume::Sender<Vec<f32>>,
+) -> Result<EmbeddingTask> {
+    tokio::task::spawn_blocking(move || {
+        let input_tokens = match req.input {
+            EmbeddingInput::String(prompt) => {
+                model.str_to_token(&prompt, AddBos::Always)?
+            }
+            _ => return Err(anyhow!("Only string prompts are supported")),
+        };
+
+        let task = EmbeddingTask {
+            to_api: callback,
+            input_token_list: input_tokens
+        };
+        Result::<_, anyhow::Error>::Ok(task)
+    }).await?
+}
+
+async fn v1_embedding(
+    State(ctx): State<Arc<Context<EmbeddingTask>>>,
+    Json(req): Json<async_openai::types::CreateEmbeddingRequest>
+) -> Response {
+    let fut = async {
+        let (tx, rx) = flume::bounded(1);
+        let format = req.encoding_format.clone().unwrap_or(EncodingFormat::Float);
+        let task= embedding_req_to_task(req, ctx.model.clone(), tx).await?;
+
+        let input_tokens = task.input_token_list.len() as u32;
+        ensure!(input_tokens <= ctx.kv_cache_size_pre_task, "input tokens too large");
+
+        send_to_backend(task, &*ctx).await?;
+
+        let out_embedding = rx.recv_async().await?;
+
+        let out = match format {
+            EncodingFormat::Float => {
+                let resp = CreateEmbeddingResponse  {
+                    object: String::from("embedding"),
+                    model: ctx.model_name.clone(),
+                    data: vec![
+                        Embedding {
+                            index: 0,
+                            object: String::from("embedding"),
+                            embedding: out_embedding
+                        }
+                    ],
+                    usage: EmbeddingUsage {
+                        prompt_tokens: input_tokens,
+                        total_tokens: input_tokens
+                    }
+                };
+                serde_json::to_vec(&resp)?
+            }
+            EncodingFormat::Base64 => {
+                let resp = CreateBase64EmbeddingResponse {
+                    object: String::from("embedding"),
+                    model: ctx.model_name.clone(),
+                    data: vec![
+                        Base64Embedding {
+                            index: 0,
+                            object: String::from("embedding"),
+                            embedding: Base64EmbeddingVector({
+                                let mut buff: Vec<u8> = Vec::with_capacity(out_embedding.len() * 4);
+
+                                for x in out_embedding {
+                                    buff.extend_from_slice(&x.to_le_bytes());
+                                }
+
+                                BASE64_STANDARD.encode(&buff)
+                            })
+                        }
+                    ],
+                    usage: EmbeddingUsage {
+                        prompt_tokens: input_tokens,
+                        total_tokens: input_tokens
+                    }
+                };
+                serde_json::to_vec(&resp)?
+            }
+        };
+
+        let resp = Response::new(Body::from(out));
+        Result::<_, anyhow::Error>::Ok(resp)
+    };
+
+    match fut.await {
+        Ok(resp) => resp,
+        Err(e) => {
+            error!("v1_embedding error: {:?}", e);
+
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(e.to_string()))
+                .unwrap()
+        }
+    }
+}
+
+pub async fn run_embedding(
+    bind_addr: SocketAddr,
+    model: Arc<LlamaModel>,
+    model_name: String,
+    kv_cache_size_pre_task: u32,
+    backend_bridge: flume::Sender<EmbeddingTask>,
+) -> Result<()> {
+    let ctx = Context {
+        model,
+        model_name,
+        backend_bridge,
+        kv_cache_size_pre_task,
+        chat_template: None
+    };
+
+    let ctx = Arc::new(ctx);
+    let app = Router::new()
+        .route("/v1/embedding", post(v1_embedding))
+        .with_state(ctx);
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    info!("Listening on http://{}", bind_addr);
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+pub async fn run_completions(
     bind_addr: SocketAddr,
     model: Arc<LlamaModel>,
     model_name: String,
@@ -513,7 +642,7 @@ pub async fn run(
         model_name,
         backend_bridge,
         kv_cache_size_pre_task,
-        chat_template: Arc::new(template)
+        chat_template: Some(Arc::new(template))
     };
 
     let ctx = Arc::new(ctx);

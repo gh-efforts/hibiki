@@ -1,5 +1,5 @@
 use crate::sampler::Sampler;
-use crate::{CompletionsTask, KVCacheTypes};
+use crate::{CompletionsTask, EmbeddingTask, KVCacheTypes};
 use anyhow::{anyhow, ensure, Result};
 use flume::{RecvTimeoutError, TryRecvError};
 use llama_cpp_2::context::params::LlamaContextParams;
@@ -211,7 +211,7 @@ fn completions_handler(
     model_metadata.estimate_session_size(&ctx_params);
 
     let mut ctx = model.new_context(backend, ctx_params)?;
-    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize * n_tasks as usize, 1);
 
     let mut sequence_slots = SequenceSlots::new(n_tasks, &mut batch, model);
     let mut trie_cache = RadixTrieKVCache::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ);
@@ -240,7 +240,7 @@ fn completions_handler(
                     task.temperature,
                     task.top_p
                 ),
-                callback: task.from_api,
+                callback: task.to_api,
                 token_pos: task.input_token_list.len() as u32,
                 maximum_tokens: min(
                     task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
@@ -266,7 +266,7 @@ fn completions_handler(
                             task.temperature,
                             task.top_p
                         ),
-                        callback: task.from_api,
+                        callback: task.to_api,
                         token_pos: task.input_token_list.len() as u32,
                         maximum_tokens: min(
                             task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(kv_cache_size_pre_task),
@@ -596,7 +596,7 @@ fn speculative_completions_target_handler(
     };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
-    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize * n_tasks as usize, 1);
 
     let mut slots = SpeculativeCompletionsTargetSequenceSlots::new(n_tasks, &mut batch, model, n_candidates);
     let mut trie_cache = RadixTrieKVCache::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ);
@@ -727,7 +727,7 @@ impl SpeculativeCompletionsDraftSequence {
                 task.temperature,
                 task.top_p
             ),
-            api_channel: task.from_api,
+            api_channel: task.to_api,
             to_target_channel: send_to_target,
             from_target_channel: from_target,
             maximum_tokens: task.maximum_tokens.unwrap(),
@@ -991,7 +991,7 @@ fn speculative_completions_draft_handler(
     };
 
     let mut ctx = model.new_context(backend, ctx_params)?;
-    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize, n_tasks as i32);
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize * n_tasks as usize, 1);
 
     let mut slots = SpeculativeCompletionsDraftSequenceSlots::new(n_tasks, &mut batch, model);
     let mut trie_cache = RadixTrieKVCache::new(RAIDX_TRIE_KV_CACHE_MAX_SEQ);
@@ -1104,7 +1104,111 @@ fn speculative_completions_draft_handler(
     }
 }
 
-pub async fn run(
+fn embedding_handler(
+    model: &LlamaModel,
+    backend: &LlamaBackend,
+    task_rx: &flume::Receiver<EmbeddingTask>,
+    n_tasks: u32,
+    kv_cache_size_pre_task: u32,
+    offload_kqv: bool,
+    type_k: Option<KVCacheTypes>,
+    type_v: Option<KVCacheTypes>,
+    _is_cancel: &AtomicBool,
+) -> Result<()> {
+    let mut ctx_params = LlamaContextParams::default()
+        .with_embeddings(true)
+        .with_flash_attention(true)
+        .with_offload_kqv(offload_kqv)
+        .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
+        .with_n_batch(n_tasks * kv_cache_size_pre_task);
+
+    ctx_params.context_params.n_seq_max = n_tasks;
+
+    if let Some(type_k) = type_k {
+        ctx_params.context_params.type_k = type_k as ggml_type;
+    };
+
+    if let Some(type_v) = type_v {
+        ctx_params.context_params.type_v = type_v as ggml_type;
+    };
+
+    let mut ctx = model.new_context(backend, ctx_params)?;
+    let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize * n_tasks as usize, 1);
+
+    let mut task_list = Vec::with_capacity(n_tasks as usize);
+
+    loop {
+        if task_list.is_empty() {
+            match task_rx.recv_timeout(Duration::from_secs(1)) {
+                Ok(task) => task_list.push(task),
+                Err(RecvTimeoutError::Timeout) => {
+                    continue;
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(anyhow!("Task channel disconnected"));
+                }
+            };
+        }
+
+        while task_list.len() < n_tasks as usize {
+            match task_rx.try_recv() {
+                Ok(task) => {
+                    task_list.push(task);
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    return Err(anyhow!("Task channel disconnected"));
+                }
+            }
+        }
+
+        for (seq_id, task) in task_list.iter().enumerate() {
+            for (pos, token) in task.input_token_list.iter().enumerate() {
+                batch.add(*token, pos as i32, &[seq_id as i32], false)?;
+            }
+        }
+
+        ctx.clear_kv_cache();
+        ctx.decode(&mut batch)?;
+        batch.clear();
+
+        for (seq_id, task) in task_list.drain(..).enumerate() {
+            let out = ctx.embeddings_seq_ith(seq_id as i32)?.to_vec();
+            let _ = task.to_api.send(out);
+        }
+    }
+}
+
+pub async fn run_embedding (
+    model: Arc<LlamaModel>,
+    backend: Arc<LlamaBackend>,
+    task_rx: flume::Receiver<EmbeddingTask>,
+    kv_cache_size_pre_task: u32,
+    n_tasks: u32,
+    offload_kqv: bool,
+    type_k: Option<KVCacheTypes>,
+    type_v: Option<KVCacheTypes>,
+) -> Result<()> {
+    let is_cancel = Arc::new(AtomicBool::new(false));
+    let model = model.clone();
+    let backend = backend.clone();
+
+    tokio::task::spawn_blocking(move || {
+        embedding_handler(
+            &*model,
+            &*backend,
+            &task_rx,
+            n_tasks,
+            kv_cache_size_pre_task,
+            offload_kqv,
+            type_k,
+            type_v,
+            &*is_cancel
+        )
+    }).await?
+}
+
+pub async fn run_completions(
     model: Arc<LlamaModel>,
     draft_model: Option<Arc<LlamaModel>>,
     backend: Arc<LlamaBackend>,
