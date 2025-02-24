@@ -504,20 +504,33 @@ async fn embedding_req_to_task(
     req: async_openai::types::CreateEmbeddingRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<Vec<f32>>,
-) -> Result<EmbeddingTask> {
+) -> Result<Vec<EmbeddingTask>> {
     tokio::task::spawn_blocking(move || {
         let input_tokens = match req.input {
             EmbeddingInput::String(prompt) => {
-                model.str_to_token(&prompt, AddBos::Always)?
-            }
+                vec![model.str_to_token(&prompt, AddBos::Never)?]
+            },
+            EmbeddingInput::StringArray(prompts) => {
+                let mut token_list = Vec::with_capacity(prompts.len());
+
+                for prompt in prompts {
+                    token_list.push(model.str_to_token(&prompt, AddBos::Never)?);
+                }
+                token_list
+            },
             _ => return Err(anyhow!("Only string prompts are supported")),
         };
 
-        let task = EmbeddingTask {
-            to_api: callback,
-            input_token_list: input_tokens
-        };
-        Result::<_, anyhow::Error>::Ok(task)
+        let tasks = input_tokens.into_iter()
+            .map(|tokens| {
+                EmbeddingTask {
+                    to_api: callback.clone(),
+                    input_token_list: tokens
+                }
+            })
+            .collect::<Vec<_>>();
+
+        Result::<_, anyhow::Error>::Ok(tasks)
     }).await?
 }
 
@@ -528,30 +541,37 @@ async fn v1_embedding(
     let fut = async {
         let (tx, rx) = flume::bounded(1);
         let format = req.encoding_format.clone().unwrap_or(EncodingFormat::Float);
-        let task= embedding_req_to_task(req, ctx.model.clone(), tx).await?;
+        let tasks= embedding_req_to_task(req, ctx.model.clone(), tx).await?;
 
-        let input_tokens = task.input_token_list.len() as u32;
-        ensure!(input_tokens <= ctx.kv_cache_size_pre_task, "input tokens too large");
+        let mut total_tokens = 0;
+        for task in tasks {
+            let input_tokens = task.input_token_list.len() as u32;
+            ensure!(input_tokens <= ctx.kv_cache_size_pre_task, "input tokens too large");
 
-        send_to_backend(task, &*ctx).await?;
-
-        let out_embedding = rx.recv_async().await?;
+            send_to_backend(task, &*ctx).await?;
+            total_tokens += input_tokens;
+        }
 
         let out = match format {
             EncodingFormat::Float => {
                 let resp = CreateEmbeddingResponse  {
                     object: String::from("embedding"),
                     model: ctx.model_name.clone(),
-                    data: vec![
-                        Embedding {
-                            index: 0,
-                            object: String::from("embedding"),
-                            embedding: out_embedding
+                    data: {
+                        let mut out = Vec::new();
+
+                        while let Ok(embeddings) = rx.recv_async().await  {
+                            out.push(Embedding {
+                                index: out.len() as u32,
+                                object: String::from("embedding"),
+                                embedding: embeddings
+                            });
                         }
-                    ],
+                       out
+                    },
                     usage: EmbeddingUsage {
-                        prompt_tokens: input_tokens,
-                        total_tokens: input_tokens
+                        prompt_tokens: total_tokens,
+                        total_tokens
                     }
                 };
                 serde_json::to_vec(&resp)?
@@ -560,24 +580,29 @@ async fn v1_embedding(
                 let resp = CreateBase64EmbeddingResponse {
                     object: String::from("embedding"),
                     model: ctx.model_name.clone(),
-                    data: vec![
-                        Base64Embedding {
-                            index: 0,
-                            object: String::from("embedding"),
-                            embedding: Base64EmbeddingVector({
-                                let mut buff: Vec<u8> = Vec::with_capacity(out_embedding.len() * 4);
+                    data: {
+                        let mut out = Vec::new();
 
-                                for x in out_embedding {
-                                    buff.extend_from_slice(&x.to_le_bytes());
-                                }
+                        while let Ok(embeddings) = rx.recv_async().await {
+                            out.push(Base64Embedding {
+                                index: out.len() as u32,
+                                object: String::from("embedding"),
+                                embedding: Base64EmbeddingVector({
+                                    let mut buff: Vec<u8> = Vec::with_capacity(embeddings.len() * 4);
 
-                                BASE64_STANDARD.encode(&buff)
-                            })
+                                    for x in embeddings {
+                                        buff.extend_from_slice(&x.to_le_bytes());
+                                    }
+
+                                    BASE64_STANDARD.encode(&buff)
+                                })
+                            });
                         }
-                    ],
+                        out
+                    },
                     usage: EmbeddingUsage {
-                        prompt_tokens: input_tokens,
-                        total_tokens: input_tokens
+                        prompt_tokens: total_tokens,
+                        total_tokens
                     }
                 };
                 serde_json::to_vec(&resp)?
@@ -618,7 +643,7 @@ pub async fn run_embedding(
 
     let ctx = Arc::new(ctx);
     let app = Router::new()
-        .route("/v1/embedding", post(v1_embedding))
+        .route("/v1/embeddings", post(v1_embedding))
         .with_state(ctx);
 
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
