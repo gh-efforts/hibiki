@@ -539,14 +539,14 @@ async fn v1_embedding(
     Json(req): Json<async_openai::types::CreateEmbeddingRequest>
 ) -> Response {
     let fut = async {
-        let (tx, rx) = flume::bounded(1);
+        let (tx, rx) = flume::unbounded();
         let format = req.encoding_format.clone().unwrap_or(EncodingFormat::Float);
         let tasks= embedding_req_to_task(req, ctx.model.clone(), tx).await?;
 
         let mut total_tokens = 0;
         for task in tasks {
             let input_tokens = task.input_token_list.len() as u32;
-            ensure!(input_tokens <= ctx.kv_cache_size_pre_task, "input tokens too large");
+            ensure!(input_tokens <= ctx.kv_cache_size_pre_task, "input tokens too large, input tokens len: {input_tokens}");
 
             send_to_backend(task, &*ctx).await?;
             total_tokens += input_tokens;
@@ -555,7 +555,7 @@ async fn v1_embedding(
         let out = match format {
             EncodingFormat::Float => {
                 let resp = CreateEmbeddingResponse  {
-                    object: String::from("embedding"),
+                    object: String::from("list"),
                     model: ctx.model_name.clone(),
                     data: {
                         let mut out = Vec::new();
@@ -567,18 +567,19 @@ async fn v1_embedding(
                                 embedding: embeddings
                             });
                         }
-                       out
+                        out
                     },
                     usage: EmbeddingUsage {
                         prompt_tokens: total_tokens,
                         total_tokens
                     }
                 };
+
                 serde_json::to_vec(&resp)?
             }
             EncodingFormat::Base64 => {
                 let resp = CreateBase64EmbeddingResponse {
-                    object: String::from("embedding"),
+                    object: String::from("list"),
                     model: ctx.model_name.clone(),
                     data: {
                         let mut out = Vec::new();
