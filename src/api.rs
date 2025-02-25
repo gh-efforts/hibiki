@@ -1,25 +1,25 @@
-use std::ffi::{CStr, CString};
 use crate::{CompletionsTask, EmbeddingTask};
 use anyhow::{anyhow, ensure, Result};
 use async_openai::types::{Base64Embedding, Base64EmbeddingVector, ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, CreateBase64EmbeddingResponse, CreateEmbeddingResponse, Embedding, EmbeddingInput, EmbeddingUsage, EncodingFormat, FinishReason, FunctionCall, Prompt, Role};
 use axum::body::Body;
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response, Sse};
 use axum::routing::post;
 use axum::{Json, Router};
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use chrono::Utc;
+use futures_util::StreamExt;
 use llama_cpp_2::model::{AddBos, LlamaModel, Special};
 use llama_cpp_2::token::LlamaToken;
+use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatFormat, HibikiCommonChatParams, HibikiCommonChatTemplates};
+use serde::Deserialize;
+use std::ffi::{CStr, CString};
 use std::net::SocketAddr;
 use std::ptr::null;
 use std::sync::Arc;
 use std::time::Duration;
-use axum::http::StatusCode;
-use base64::Engine;
-use base64::prelude::BASE64_STANDARD;
-use futures_util::StreamExt;
-use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatFormat, HibikiCommonChatParams, HibikiCommonChatTemplates};
-use serde::Deserialize;
 
 struct ChatTemplates {
     inner: *mut HibikiCommonChatTemplates
@@ -610,7 +610,11 @@ async fn v1_embedding(
             }
         };
 
-        let resp = Response::new(Body::from(out));
+        let resp = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(out))?;
+
         Result::<_, anyhow::Error>::Ok(resp)
     };
 
