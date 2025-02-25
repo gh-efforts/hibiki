@@ -15,6 +15,7 @@ use std::collections::{BTreeMap};
 use std::num::NonZeroU32;
 use std::ptr::slice_from_raw_parts;
 use std::rc::Rc;
+use std::slice;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::task::Poll;
@@ -1164,17 +1165,25 @@ fn embedding_handler(
 
         for (seq_id, task) in task_list.iter().enumerate() {
             for (pos, token) in task.input_token_list.iter().enumerate() {
-                batch.add(*token, pos as i32, &[seq_id as i32], false)?;
+                batch.add(*token, pos as i32, &[seq_id as i32], true)?;
             }
         }
 
         ctx.clear_kv_cache();
         ctx.decode(&mut batch)?;
+        let embeddings_len = batch.n_tokens() * model.n_embd();
         batch.clear();
 
-        for (seq_id, task) in task_list.drain(..).enumerate() {
-            let out = ctx.embeddings_seq_ith(seq_id as i32)?.to_vec();
-            let _ = task.to_api.send(out);
+        let mut out = unsafe {
+            let out_ptr = llama_cpp_sys_2::llama_get_embeddings(ctx.context.as_ptr());
+            ensure!(!out_ptr.is_null());
+            slice::from_raw_parts(out_ptr, embeddings_len as usize)
+        };
+
+        for task in task_list.drain(..){
+            let (l, r) = out.split_at(task.input_token_list.len() * model.n_embd() as usize);
+            out = r;
+            let _ = task.to_api.send(l.to_vec());
         }
     }
 }
