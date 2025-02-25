@@ -8,7 +8,7 @@ use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::{LlamaModel};
 use llama_cpp_2::token::LlamaToken;
-use llama_cpp_sys_2::{ggml_type, hibiki_common_speculative_are_compatible};
+use llama_cpp_sys_2::{ggml_type, hibiki_common_speculative_are_compatible, LLAMA_POOLING_TYPE_NONE};
 use std::cell::RefCell;
 use std::cmp::{max, min};
 use std::collections::{BTreeMap};
@@ -1135,6 +1135,7 @@ fn embedding_handler(
 
     let mut ctx = model.new_context(backend, ctx_params)?;
     let mut batch = LlamaBatch::new(kv_cache_size_pre_task as usize * n_tasks as usize, 1);
+    let pooling_type = unsafe {llama_cpp_sys_2::llama_pooling_type(ctx.context.as_ptr())};
 
     let mut task_list = Vec::with_capacity(n_tasks as usize);
 
@@ -1165,7 +1166,7 @@ fn embedding_handler(
 
         for (seq_id, task) in task_list.iter().enumerate() {
             for (pos, token) in task.input_token_list.iter().enumerate() {
-                batch.add(*token, pos as i32, &[seq_id as i32], true)?;
+                batch.add(*token, pos as i32, &[seq_id as i32], pooling_type == LLAMA_POOLING_TYPE_NONE)?;
             }
         }
 
@@ -1174,16 +1175,23 @@ fn embedding_handler(
         let embeddings_len = batch.n_tokens() * model.n_embd();
         batch.clear();
 
-        let mut out = unsafe {
-            let out_ptr = llama_cpp_sys_2::llama_get_embeddings(ctx.context.as_ptr());
-            ensure!(!out_ptr.is_null());
-            slice::from_raw_parts(out_ptr, embeddings_len as usize)
-        };
+        if pooling_type == LLAMA_POOLING_TYPE_NONE {
+            let mut out = unsafe {
+                let out_ptr = llama_cpp_sys_2::llama_get_embeddings(ctx.context.as_ptr());
+                ensure!(!out_ptr.is_null());
+                slice::from_raw_parts(out_ptr, embeddings_len as usize)
+            };
 
-        for task in task_list.drain(..){
-            let (l, r) = out.split_at(task.input_token_list.len() * model.n_embd() as usize);
-            out = r;
-            let _ = task.to_api.send(l.to_vec());
+            for task in task_list.drain(..){
+                let (l, r) = out.split_at(task.input_token_list.len() * model.n_embd() as usize);
+                out = r;
+                let _ = task.to_api.send(l.to_vec());
+            }
+        } else {
+            for (seq_id, task) in task_list.drain(..).enumerate() {
+                let out = ctx.embeddings_seq_ith(seq_id as i32)?.to_vec();
+                let _ = task.to_api.send(out);
+            }
         }
     }
 }
