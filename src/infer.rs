@@ -1116,6 +1116,8 @@ fn embedding_handler(
     type_v: Option<KVCacheTypes>,
     _is_cancel: &AtomicBool,
 ) -> Result<()> {
+    let n_embd = model.n_embd() as usize;
+
     let mut ctx_params = LlamaContextParams::default()
         .with_embeddings(true)
         .with_flash_attention(true)
@@ -1172,18 +1174,18 @@ fn embedding_handler(
 
         ctx.clear_kv_cache();
         ctx.decode(&mut batch)?;
-        let embeddings_len = batch.n_tokens() * model.n_embd();
+        let embeddings_len = task_list.len() * n_embd;
         batch.clear();
 
         if pooling_type == LLAMA_POOLING_TYPE_NONE {
             let mut out = unsafe {
                 let out_ptr = llama_cpp_sys_2::llama_get_embeddings(ctx.context.as_ptr());
                 ensure!(!out_ptr.is_null());
-                slice::from_raw_parts(out_ptr, embeddings_len as usize)
+                slice::from_raw_parts(out_ptr, embeddings_len)
             };
 
             for task in task_list.drain(..){
-                let (l, r) = out.split_at(task.input_token_list.len() * model.n_embd() as usize);
+                let (l, r) = out.split_at(n_embd);
                 out = r;
                 let _ = task.to_api.send(l.to_vec());
             }
