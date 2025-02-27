@@ -197,8 +197,7 @@ fn completions_handler(
         .with_flash_attention(true)
         .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
-        .with_n_batch(n_tasks * kv_cache_size_pre_task)
-        .with_n_ubatch(n_tasks * kv_cache_size_pre_task);
+        .with_n_batch(n_tasks * kv_cache_size_pre_task);
 
     ctx_params.context_params.n_seq_max = n_tasks;
 
