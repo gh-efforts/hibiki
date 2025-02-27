@@ -21,6 +21,7 @@ use std::net::SocketAddr;
 use std::ptr::null;
 use std::sync::Arc;
 use std::time::Duration;
+use log::__private_api::loc;
 
 struct ChatTemplates {
     inner: *mut HibikiCommonChatTemplates
@@ -315,8 +316,9 @@ async fn v1_chat_completions(
                 if log::max_level() >= log::Level::Debug {
                     let token_bytes = ctx.model.token_to_bytes(token, Special::Plaintext)?;
                     let s = String::from_utf8_lossy(&token_bytes);
-                    print!("{}", s);
-                    std::io::stdout().flush()?;
+                    let mut lock = std::io::stdout().lock();
+                    lock.write_all(s.as_bytes())?;
+                    lock.flush()?;
                 }
             }
 
