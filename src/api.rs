@@ -16,6 +16,7 @@ use llama_cpp_2::token::LlamaToken;
 use llama_cpp_sys_2::{hibiki_body_to_chat_params, hibiki_common_chat_params_free, hibiki_common_chat_parse, hibiki_common_chat_templates_free, hibiki_common_chat_templates_from_model, hibiki_get_common_chat_params_format, hibiki_get_common_chat_params_prompt, hibiki_get_common_chat_params_prompt_length, HibikiCommonChatFormat, HibikiCommonChatParams, HibikiCommonChatTemplates};
 use serde::Deserialize;
 use std::ffi::{CStr, CString};
+use std::io::Write;
 use std::net::SocketAddr;
 use std::ptr::null;
 use std::sync::Arc;
@@ -252,7 +253,11 @@ async fn v1_chat_completions(
                     };
 
                     single_token_bytes.clear();
-                    debug!("v1_chat_completions, gen token: {}", text);
+
+                    if log::max_level() >= log::Level::Debug {
+                        print!("{}", text);
+                        std::io::stdout().flush()?;
+                    }
 
                     let chat_completion_resp = async_openai::types::CreateChatCompletionStreamResponse {
                         id: chat_completion_id.clone(),
@@ -306,6 +311,13 @@ async fn v1_chat_completions(
             let mut out_tokens = Vec::new();
             while let Ok(token) = rx.recv_async().await {
                 out_tokens.push(token);
+
+                if log::max_level() >= log::Level::Debug {
+                    let token_bytes = ctx.model.token_to_bytes(token, Special::Plaintext)?;
+                    let s = String::from_utf8_lossy(&token_bytes);
+                    print!("{}", s);
+                    std::io::stdout().flush()?;
+                }
             }
 
             let completion_tokens = out_tokens.len() as u32;

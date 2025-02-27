@@ -25,6 +25,7 @@ mod sampler;
 mod radixtrie_kv_cache;
 #[allow(unused)]
 mod metadata;
+mod ngran_cache;
 
 struct CompletionsTask {
     to_api: flume::Sender<LlamaToken>,
