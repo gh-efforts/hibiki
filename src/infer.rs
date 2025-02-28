@@ -194,7 +194,7 @@ fn completions_handler(
     let model_metadata = ModelMetadata::from(model);
 
     let mut ctx_params = LlamaContextParams::default()
-        // .with_flash_attention(true)
+        .with_flash_attention(false)
         .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
@@ -581,7 +581,7 @@ fn speculative_completions_target_handler(
     _is_cancel: &AtomicBool
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
-        .with_flash_attention(true)
+        .with_flash_attention(false)
         .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
@@ -976,7 +976,7 @@ fn speculative_completions_draft_handler(
     type_v: Option<KVCacheTypes>,
 ) -> Result<()> {
     let mut ctx_params = LlamaContextParams::default()
-        .with_flash_attention(true)
+        .with_flash_attention(false)
         .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
@@ -1120,7 +1120,7 @@ fn embedding_handler(
 
     let mut ctx_params = LlamaContextParams::default()
         .with_embeddings(true)
-        .with_flash_attention(true)
+        .with_flash_attention(false)
         .with_offload_kqv(offload_kqv)
         .with_n_ctx(NonZeroU32::new(n_tasks * kv_cache_size_pre_task))
         .with_n_batch(n_tasks * kv_cache_size_pre_task);
