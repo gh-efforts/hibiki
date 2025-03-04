@@ -21,7 +21,6 @@ use std::net::SocketAddr;
 use std::ptr::null;
 use std::sync::Arc;
 use std::time::Duration;
-use log::__private_api::loc;
 
 struct ChatTemplates {
     inner: *mut HibikiCommonChatTemplates

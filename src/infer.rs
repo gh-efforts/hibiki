@@ -21,6 +21,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 use crate::metadata::ModelMetadata;
+use crate::ngran_cache::NgranCache;
 use crate::radixtrie_kv_cache::RadixTrieKVCache;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -1105,6 +1106,206 @@ fn speculative_completions_draft_handler(
     }
 }
 
+struct SpeculativeCompletionsNgramSequence {
+    confirmed_tokens: Vec<LlamaToken>,
+    unconfirmed_tokens: Vec<LlamaToken>,
+    api_channel: flume::Sender<LlamaToken>,
+    to_target_channel: flume::Sender<SpeculativeCompletionsTargetInput>,
+    from_target_channel: flume::Receiver<SpeculativeCompletionsTargetOutput>,
+    maximum_tokens: u32,
+    max_unconfirmed_tokens: usize,
+    total_draft_tokens: u32,
+    total_accept_tokens: u32,
+}
+
+impl SpeculativeCompletionsNgramSequence {
+    fn new(
+        task: CompletionsTask,
+        send_to_target: flume::Sender<SpeculativeCompletionsTargetInput>,
+        from_target:  flume::Receiver<SpeculativeCompletionsTargetOutput>,
+        max_unconfirmed_tokens: usize,
+    ) -> Self {
+        SpeculativeCompletionsNgramSequence {
+            confirmed_tokens: task.input_token_list,
+            unconfirmed_tokens: Vec::new(),
+            api_channel: task.to_api,
+            to_target_channel: send_to_target,
+            from_target_channel: from_target,
+            maximum_tokens: task.maximum_tokens.unwrap(),
+            max_unconfirmed_tokens,
+            total_draft_tokens: 0,
+            total_accept_tokens: 0
+        }
+    }
+}
+
+struct SpeculativeCompletionsNgramSlots<'a> {
+    model: &'a LlamaModel,
+    task_rx: &'a flume::Receiver<CompletionsTask>,
+    sequence_list: Vec<SpeculativeCompletionsNgramSequence>,
+    ngram_cache: &'a mut NgranCache,
+    to_target_handler: &'a flume::Sender<SpeculativeCompletionsTargetTask>,
+    kv_cache_size_pre_task: u32,
+    max_unconfirmed_tokens: usize,
+}
+
+enum TaskEither {
+    CompletionsTask(CompletionsTask),
+    // seq_id, seq
+    SpeculativeCompletionsTargetOutput((usize, SpeculativeCompletionsTargetOutput))
+}
+
+impl <'a> SpeculativeCompletionsNgramSlots<'a> {
+    fn new(
+        model: &'a LlamaModel,
+        task_rx: &'a flume::Receiver<CompletionsTask>,
+        ngram_cache: &'a mut NgranCache,
+        to_target_handler: &'a flume::Sender<SpeculativeCompletionsTargetTask>,
+        kv_cache_size_pre_task: u32,
+        max_unconfirmed_tokens: usize,
+    ) -> Self {
+        Self {
+            model,
+            task_rx,
+            sequence_list: Vec::new(),
+            ngram_cache,
+            to_target_handler,
+            kv_cache_size_pre_task,
+            max_unconfirmed_tokens
+        }
+    }
+
+    fn poll(&mut self) -> Result<()> {
+        let mut selector = flume::Selector::new();
+        selector = selector.recv(&self.task_rx, |res| res.map(|t| TaskEither::CompletionsTask(t)));
+
+        for (seq_id, seq) in self.sequence_list.iter().enumerate() {
+            selector = selector.recv(&seq.from_target_channel, move |res| res.map(|t| TaskEither::SpeculativeCompletionsTargetOutput((seq_id, t))));
+        }
+
+        let task = selector.wait()?;
+
+        match task {
+            TaskEither::CompletionsTask(mut task) => {
+                let (to_target, from_draft) = flume::unbounded();
+                let (to_draft, from_target) = flume::unbounded();
+
+                task.seed = Some(task.seed.unwrap_or_else(|| rand::random()));
+                task.maximum_tokens = {
+                    let out = min(
+                        task.maximum_tokens.map(|n_tokens| n_tokens + task.input_token_list.len() as u32).unwrap_or(self.kv_cache_size_pre_task),
+                        self.kv_cache_size_pre_task
+                    );
+                    Some(out)
+                };
+
+                let target_task = SpeculativeCompletionsTargetTask {
+                    frequency_penalty: task.frequency_penalty,
+                    presence_penalty: task.presence_penalty,
+                    seed: task.seed.unwrap(),
+                    temperature: task.temperature,
+                    top_p: task.top_p,
+                    input_channel: from_draft,
+                    output_channel: to_draft
+                };
+
+                self.to_target_handler.send(target_task)?;
+                to_target.send(SpeculativeCompletionsTargetInput::PromptInput { token_list: task.input_token_list.clone() })?;
+
+                let mut seq = SpeculativeCompletionsNgramSequence::new(task, to_target, from_target, self.max_unconfirmed_tokens);
+
+                let raw_confirmed_tokens = seq.confirmed_tokens.iter().map(|v| v.0).collect::<Vec<_>>();
+                self.ngram_cache.update(1, raw_confirmed_tokens.len() as i32, &raw_confirmed_tokens, raw_confirmed_tokens.len() as i32);
+
+                let drafts_tokens = min(seq.max_unconfirmed_tokens as i32, seq.maximum_tokens as i32 - raw_confirmed_tokens.len() as i32);
+                let mut drafts = vec![0; drafts_tokens as usize + 1];
+                drafts[0] = raw_confirmed_tokens[seq.confirmed_tokens.len() - 1];
+
+                let draft_len = self.ngram_cache.draft(&raw_confirmed_tokens, &mut drafts, 1, drafts_tokens);
+                seq.unconfirmed_tokens = drafts[1..draft_len].iter().map(|&token| LlamaToken::new(token)).collect();
+
+                if seq.unconfirmed_tokens.is_empty() {
+                    seq.unconfirmed_tokens.push(LlamaToken::new(0));
+                }
+
+                seq.to_target_channel.send(SpeculativeCompletionsTargetInput::DraftInput {draft_token_list: seq.unconfirmed_tokens.clone()})?;
+                self.sequence_list.push(seq);
+            }
+            TaskEither::SpeculativeCompletionsTargetOutput((seq_id, target_out)) => {
+                let seq = &mut self.sequence_list[seq_id];
+
+                info!("accept_token_n: {}", target_out.accept_token_n);
+
+                let old_confirmed_len = seq.confirmed_tokens.len();
+                let new_confirmed_tokens = target_out.accept_token_n + if target_out.next_token.is_some() { 1 } else { 0 };
+                let update_to_confirm = &seq.unconfirmed_tokens[..target_out.accept_token_n as usize];
+
+                seq.confirmed_tokens.extend_from_slice(update_to_confirm);
+                if let Some(next_token) = target_out.next_token {
+                    seq.confirmed_tokens.push(next_token);
+                }
+
+                let raw_confirmed_tokens = seq.confirmed_tokens.iter().map(|v| v.0).collect::<Vec<_>>();
+                self.ngram_cache.update(1, raw_confirmed_tokens.len() as i32, &raw_confirmed_tokens, new_confirmed_tokens as i32 );
+
+                for &token in &seq.confirmed_tokens[old_confirmed_len..old_confirmed_len + new_confirmed_tokens as usize] {
+                    if self.model.is_eog_token(token) {
+                        self.sequence_list.remove(seq_id);
+                        return Ok(());
+                    }
+
+                    if seq.api_channel.send(token).is_err() {
+                        self.sequence_list.remove(seq_id);
+                        return Ok(());
+                    }
+                }
+
+                if seq.confirmed_tokens.len() >= seq.maximum_tokens as usize {
+                    self.sequence_list.remove(seq_id);
+                    return Ok(());
+                }
+
+                let drafts_tokens = min(seq.max_unconfirmed_tokens as i32, seq.maximum_tokens as i32 - raw_confirmed_tokens.len() as i32);
+                let mut drafts = vec![0; drafts_tokens as usize + 1];
+                drafts[0] = raw_confirmed_tokens[seq.confirmed_tokens.len() - 1];
+
+                let draft_len = self.ngram_cache.draft(&raw_confirmed_tokens, &mut drafts, 1, drafts_tokens);
+                seq.unconfirmed_tokens = drafts[1..draft_len].iter().map(|&token| LlamaToken::new(token)).collect();
+
+                if seq.unconfirmed_tokens.is_empty() {
+                    seq.unconfirmed_tokens.push(LlamaToken::new(0));
+                }
+
+                seq.to_target_channel.send(SpeculativeCompletionsTargetInput::DraftInput {draft_token_list: seq.unconfirmed_tokens.clone()})?;
+            }
+        };
+        Ok(())
+    }
+}
+
+fn speculative_completions_ngram_handler(
+    model: &LlamaModel,
+    to_target_handler: &flume::Sender<SpeculativeCompletionsTargetTask>,
+    task_rx: &flume::Receiver<CompletionsTask>,
+    kv_cache_size_pre_task: u32,
+    max_unconfirmed_tokens: usize,
+) -> Result<()> {
+    let mut ngram_cache = NgranCache::new();
+
+    let mut slots = SpeculativeCompletionsNgramSlots::new(
+        model,
+        task_rx,
+        &mut ngram_cache,
+        to_target_handler,
+        kv_cache_size_pre_task,
+        max_unconfirmed_tokens
+    );
+
+    loop {
+        slots.poll()?;
+    }
+}
+
 fn embedding_handler(
     model: &LlamaModel,
     backend: &LlamaBackend,
@@ -1240,7 +1441,8 @@ pub async fn run_completions(
     type_k: Option<KVCacheTypes>,
     type_v: Option<KVCacheTypes>,
     draft_type_k: Option<KVCacheTypes>,
-    draft_type_v: Option<KVCacheTypes>
+    draft_type_v: Option<KVCacheTypes>,
+    lookup: bool
 ) -> Result<()> {
     let is_cancel = Arc::new(AtomicBool::new(false));
 
@@ -1249,19 +1451,60 @@ pub async fn run_completions(
             let model = model.clone();
             let backend = backend.clone();
 
-            tokio::task::spawn_blocking(move || {
-                completions_handler(
-                    &*model,
-                    &*backend,
-                    &task_rx,
-                    n_tasks,
-                    kv_cache_size_pre_task,
-                    offload_kqv,
-                    type_k,
-                    type_v,
-                    &*is_cancel
-                )
-            }).await?
+            if lookup {
+                let (to_target_handler, from_ngram_handler) = flume::unbounded();
+
+                let target_handle = tokio::task::spawn_blocking({
+                    let model = model.clone();
+                    let backend = backend.clone();
+
+                    move || {
+                        speculative_completions_target_handler(
+                            &*model,
+                            &*backend,
+                            &from_ngram_handler,
+                            n_tasks,
+                            kv_cache_size_pre_task,
+                            n_candidates,
+                            offload_kqv,
+                            type_k,
+                            type_v,
+                            &*is_cancel,
+                        )
+                    }
+                });
+
+                let ngram_handle = tokio::task::spawn_blocking(move || {
+                    speculative_completions_ngram_handler(
+                        &model,
+                        &to_target_handler,
+                        &task_rx,
+                        kv_cache_size_pre_task,
+                        max_unconfirmed_tokens
+                    )
+                });
+
+                let res = tokio::try_join!{
+                    async {target_handle.await?},
+                    async {ngram_handle.await?}
+                };
+                res?;
+                Ok(())
+            } else {
+                tokio::task::spawn_blocking(move || {
+                    completions_handler(
+                        &*model,
+                        &*backend,
+                        &task_rx,
+                        n_tasks,
+                        kv_cache_size_pre_task,
+                        offload_kqv,
+                        type_k,
+                        type_v,
+                        &*is_cancel
+                    )
+                }).await?
+            }
         }
         Some(draft_model) => {
             {

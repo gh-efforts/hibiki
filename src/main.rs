@@ -127,7 +127,10 @@ struct Args {
     draft_type_v: Option<KVCacheTypes>,
 
     #[arg(long, default_value_t = false)]
-    embedding: bool
+    embedding: bool,
+
+    #[arg(long, default_value_t = false)]
+    lookup: bool
 }
 
 fn logger_init() -> Result<()> {
@@ -201,6 +204,7 @@ fn exec(args: Args) -> Result<()> {
         add_rpc_devices(&rpc_servers)?;
     }
 
+    // todo numa init
     let backend = llama_backend::LlamaBackend::init()?;
     let backend = Arc::new(backend);
 
@@ -292,7 +296,8 @@ fn exec(args: Args) -> Result<()> {
                 args.type_k,
                 args.type_v,
                 args.draft_type_k,
-                args.draft_type_v
+                args.draft_type_v,
+                args.lookup
             );
 
             let api_handle = api::run_completions(

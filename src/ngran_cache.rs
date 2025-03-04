@@ -1,5 +1,4 @@
 use llama_cpp_sys_2::{llama_token, HibikiCommonNgramCache};
-use anyhow::Result;
 
 pub struct NgranCache {
     nc_context: *mut HibikiCommonNgramCache,
@@ -53,7 +52,7 @@ impl NgranCache {
                 inp_data.len() as i32,
                 draft.as_mut_ptr(),
                 &mut draft_len,
-                draft.len() as i32,
+                draft.len() as i32 - 1,
                 ngram_min,
                 ngram_max,
                 self.nc_context,
@@ -73,4 +72,20 @@ impl Drop for NgranCache {
             llama_cpp_sys_2::hibiki_common_ngram_cache_free(self.nc_static);
         }
     }
+}
+
+#[test]
+fn test() {
+    let _backend = llama_backend::LlamaBackend::init().unwrap();
+
+    let mut cache = NgranCache::new();
+    let inp_data = [1, 2, 3];
+    cache.update(1, 4, &inp_data, inp_data.len() as i32);
+    // cache.update(1, 4, &inp_data, inp_data.len() as i32);
+
+    let mut out = [0i32; 10];
+    out[0] = 2;
+    let len = cache.draft(&[1, 2], &mut out, 2, 4);
+
+    println!("{:?}", &out[1..len]);
 }
