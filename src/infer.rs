@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 use crate::metadata::ModelMetadata;
-use crate::ngran_cache::NgranCache;
+use crate::ngran_cache::{NgranCache, NGRAM_MAX, NGRAM_MIN};
 use crate::radixtrie_kv_cache::RadixTrieKVCache;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -1215,13 +1215,13 @@ impl <'a> SpeculativeCompletionsNgramSlots<'a> {
                 let mut seq = SpeculativeCompletionsNgramSequence::new(task, to_target, from_target, self.max_unconfirmed_tokens);
 
                 let raw_confirmed_tokens = seq.confirmed_tokens.iter().map(|v| v.0).collect::<Vec<_>>();
-                self.ngram_cache.update(1, raw_confirmed_tokens.len() as i32, &raw_confirmed_tokens, raw_confirmed_tokens.len() as i32);
+                self.ngram_cache.update(NGRAM_MIN, NGRAM_MAX, &raw_confirmed_tokens, raw_confirmed_tokens.len() as i32);
 
                 let drafts_tokens = min(seq.max_unconfirmed_tokens as i32, seq.maximum_tokens as i32 - raw_confirmed_tokens.len() as i32);
                 let mut drafts = vec![0; drafts_tokens as usize + 1];
                 drafts[0] = raw_confirmed_tokens[seq.confirmed_tokens.len() - 1];
 
-                let draft_len = self.ngram_cache.draft(&raw_confirmed_tokens, &mut drafts, 1, drafts_tokens);
+                let draft_len = self.ngram_cache.draft(&raw_confirmed_tokens, &mut drafts, NGRAM_MIN, NGRAM_MAX);
                 seq.unconfirmed_tokens = drafts[1..draft_len].iter().map(|&token| LlamaToken::new(token)).collect();
 
                 if seq.unconfirmed_tokens.is_empty() {
@@ -1235,6 +1235,8 @@ impl <'a> SpeculativeCompletionsNgramSlots<'a> {
                 let seq = &mut self.sequence_list[seq_id];
 
                 info!("accept_token_n: {}", target_out.accept_token_n);
+                seq.total_draft_tokens += seq.unconfirmed_tokens.len() as u32;
+                seq.total_accept_tokens += target_out.accept_token_n;
 
                 let old_confirmed_len = seq.confirmed_tokens.len();
                 let new_confirmed_tokens = target_out.accept_token_n + if target_out.next_token.is_some() { 1 } else { 0 };
@@ -1245,8 +1247,17 @@ impl <'a> SpeculativeCompletionsNgramSlots<'a> {
                     seq.confirmed_tokens.push(next_token);
                 }
 
+                let accept_rate = target_out.accept_token_n as f32 / seq.unconfirmed_tokens.len() as f32;
+                if accept_rate >= 0.8 {
+                    seq.max_unconfirmed_tokens += 2;
+                }
+
+                if accept_rate < 0.4 {
+                    seq.max_unconfirmed_tokens = max(2, seq.max_unconfirmed_tokens - 2);
+                }
+
                 let raw_confirmed_tokens = seq.confirmed_tokens.iter().map(|v| v.0).collect::<Vec<_>>();
-                self.ngram_cache.update(1, raw_confirmed_tokens.len() as i32, &raw_confirmed_tokens, new_confirmed_tokens as i32 );
+                self.ngram_cache.update(NGRAM_MIN, NGRAM_MAX, &raw_confirmed_tokens, new_confirmed_tokens as i32 );
 
                 for &token in &seq.confirmed_tokens[old_confirmed_len..old_confirmed_len + new_confirmed_tokens as usize] {
                     if self.model.is_eog_token(token) {
@@ -1269,7 +1280,7 @@ impl <'a> SpeculativeCompletionsNgramSlots<'a> {
                 let mut drafts = vec![0; drafts_tokens as usize + 1];
                 drafts[0] = raw_confirmed_tokens[seq.confirmed_tokens.len() - 1];
 
-                let draft_len = self.ngram_cache.draft(&raw_confirmed_tokens, &mut drafts, 1, drafts_tokens);
+                let draft_len = self.ngram_cache.draft(&raw_confirmed_tokens, &mut drafts, NGRAM_MIN, NGRAM_MAX);
                 seq.unconfirmed_tokens = drafts[1..draft_len].iter().map(|&token| LlamaToken::new(token)).collect();
 
                 if seq.unconfirmed_tokens.is_empty() {
