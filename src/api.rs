@@ -1,6 +1,6 @@
 use crate::{CompletionsTask, EmbeddingTask};
 use anyhow::{anyhow, ensure, Result};
-use async_openai::types::{Base64Embedding, Base64EmbeddingVector, ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, CreateBase64EmbeddingResponse, CreateEmbeddingResponse, Embedding, EmbeddingInput, EmbeddingUsage, EncodingFormat, FinishReason, FunctionCall, Prompt, Role};
+use async_openai::types::{Base64Embedding, Base64EmbeddingVector, ChatChoice, ChatChoiceStream, ChatCompletionMessageToolCall, ChatCompletionRequestMessage, ChatCompletionResponseMessage, ChatCompletionStreamResponseDelta, ChatCompletionToolType, Choice, CreateBase64EmbeddingResponse, CreateEmbeddingResponse, Embedding, EmbeddingInput, EmbeddingUsage, EncodingFormat, FinishReason, FunctionCall, Prompt, Role};
 use axum::body::Body;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -196,12 +196,27 @@ async fn send_to_backend<Task: Send + Sync + 'static>(
 }
 // ret: (task, chat_template_format)
 async fn chat_completion_req_to_task(
-    req: async_openai::types::CreateChatCompletionRequest,
+    mut req: async_openai::types::CreateChatCompletionRequest,
     model: Arc<LlamaModel>,
     callback: flume::Sender<LlamaToken>,
     template: Arc<ChatTemplates>
 ) -> Result<(CompletionsTask, HibikiCommonChatFormat)> {
     tokio::task::spawn_blocking(move || {
+        for msg in req.messages.iter_mut() {
+            match msg {
+                ChatCompletionRequestMessage::Assistant(msg) => {
+                    if msg.content.is_none() {
+                        msg.content = Some("".into());
+                    }
+                }
+                ChatCompletionRequestMessage::Function(msg) => {
+                    if msg.content.is_none() {
+                        msg.content = Some("".into());
+                    }
+                }
+                _ => ()
+            }
+        }
         let req_json = serde_json::to_string(&req)?;
         let params = body_json_to_chat_params(&template, req_json.as_str());
         debug!("body_json_to_chat_params finished");
