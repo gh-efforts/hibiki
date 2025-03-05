@@ -101,19 +101,29 @@ fn body_json_to_chat_params(tmpl: &ChatTemplates, body_json: &str) -> ChatParams
 }
 
 #[derive(Deserialize, Debug)]
-struct CommonToolCall {
+struct CommonChatToolCall {
     name: String,
     arguments: String,
     id: String,
 }
 
-#[allow(unused)]
 #[derive(Deserialize, Debug)]
+#[allow(unused)]
+struct CommonChatMsgContentPart {
+    r#type: String,
+    text: String,
+}
+
+#[derive(Deserialize, Debug)]
+#[allow(unused)]
 struct CommonChatMsg {
     role: String,
     content: String,
-    tool_calls: Vec<CommonToolCall>,
-    tool_plan: String,
+    content_parts: Vec<CommonChatMsgContentPart>,
+    tool_calls: Vec<CommonChatToolCall>,
+    reasoning_content: String,
+    tool_name: String,
+    tool_call_id: String,
 }
 
 fn output_parse(msg: &str, format: HibikiCommonChatFormat) -> Result<CommonChatMsg> {
