@@ -92,11 +92,16 @@ impl Drop for ChatParams {
     }
 }
 
-fn body_json_to_chat_params(tmpl: &ChatTemplates, body_json: &str) -> ChatParams {
+fn body_json_to_chat_params(tmpl: &ChatTemplates, body_json: &str) -> Result<ChatParams> {
     unsafe {
         let body_json = CString::new(body_json).unwrap();
         let params = hibiki_body_to_chat_params(tmpl.inner, body_json.as_bytes_with_nul().as_ptr() as *const i8);
-        ChatParams { inner: params }
+
+        if params.is_null() {
+            return Err(anyhow!("hibiki_body_to_chat_params failed"));
+        }
+
+        Ok(ChatParams { inner: params })
     }
 }
 
@@ -218,7 +223,7 @@ async fn chat_completion_req_to_task(
             }
         }
         let req_json = serde_json::to_string(&req)?;
-        let params = body_json_to_chat_params(&template, req_json.as_str());
+        let params = body_json_to_chat_params(&template, req_json.as_str())?;
         debug!("body_json_to_chat_params finished");
 
         let prompt = params.get_prompt()?;
