@@ -47,15 +47,12 @@ jobs:
           # all of these default to true, but feel free to set to
           # "false" if necessary for your workflow
           android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+#          dotnet: true
+#          haskell: true
+#          large-packages: true
+#          docker-images: true
+#          swap-storage: true
         if : matrix.os == 'ubuntu-22.04'
-      - uses: KyleMayes/install-llvm-action@v2
-        with:
-          version: "19.1.0"
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.21
       - run: |
