@@ -53,6 +53,9 @@ jobs:
           docker-images: true
           swap-storage: true
         if : matrix.os == 'ubuntu-22.04'
+      - uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "20.1"
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.21
       - run: |
