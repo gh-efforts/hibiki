@@ -47,11 +47,11 @@ jobs:
           # all of these default to true, but feel free to set to
           # "false" if necessary for your workflow
           android: true
-#          dotnet: true
-#          haskell: true
-#          large-packages: true
-#          docker-images: true
-#          swap-storage: true
+          dotnet: true
+          haskell: true
+          large-packages: false
+          docker-images: flase
+          swap-storage: false
         if : matrix.os == 'ubuntu-22.04'
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.21
