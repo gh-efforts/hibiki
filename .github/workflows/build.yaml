@@ -55,7 +55,7 @@ jobs:
         if : matrix.os == 'ubuntu-22.04'
       - uses: KyleMayes/install-llvm-action@v2
         with:
-          version: "20.1"
+          version: "19.1.0"
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.21
       - run: |
