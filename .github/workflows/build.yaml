@@ -38,23 +38,31 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
+      - uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+        if : matrix.os == 'ubuntu-22.04'
       - uses: actions/checkout@v4
       - uses: Jimver/cuda-toolkit@v0.2.21
-        with:
-          method: network
-          sub-packages: '["nvcc", "cudart"]'
-          non-cuda-sub-packages: '["libcublas"]'
       - run: |
           $cudaPath = [System.Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
-          $binPath = Join-Path -Path $cudaPath -ChildPath 'bin'
-          
-          Get-ChildItem $binPath
-#          $cublasDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublas64_12.dll'
-#          $cublasLtDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublasLt64_12.dll'
-#
-#          $currentDir = Get-Location
-#          Copy-Item -Path $cublasDll -Destination $currentDir
-#          Copy-Item -Path $cublasLtDll -Destination $currentDir
+          $cublasDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublas64_12.dll'
+          $cublasLtDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublasLt64_12.dll'
+
+          $currentDir = Get-Location
+          Copy-Item -Path $cublasDll -Destination $currentDir
+          Copy-Item -Path $cublasLtDll -Destination $currentDir
         if: matrix.os == 'windows-latest'
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
