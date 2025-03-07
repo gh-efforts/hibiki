@@ -42,7 +42,8 @@ jobs:
       - uses: Jimver/cuda-toolkit@v0.2.21
         with:
           method: network
-          sub-packages: '["nvcc"]'
+          sub-packages: '["nvcc", "cudart"]'
+          non-cuda-sub-packages: '["libcublas"]'
       - run: |
           $cudaPath = [System.Environment]::GetEnvironmentVariable('CUDA_PATH', 'Machine')
           $cublasDll = Join-Path -Path $cudaPath -ChildPath 'bin\cublas64_12.dll'
