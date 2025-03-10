@@ -25,7 +25,7 @@ radix_trie = "0.2"
 base64 = "0.22"
 
 [features]
-#cuda = ["llama-cpp-2/cuda"]
+cuda = ["llama-cpp-2/cuda"]
 dynlink = ["llama-cpp-2/dynamic-link"]
 
 [profile.release]
