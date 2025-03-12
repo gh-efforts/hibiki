@@ -75,6 +75,8 @@ pub fn get_metadata_raw(model: &LlamaModel, key: &str) -> String {
 }
 
 pub struct ModelMetadata {
+    pub model_name: String,
+
     /// The size of this model's vocabulary, in tokens.
     pub vocabulary_size: usize,
 
@@ -125,6 +127,7 @@ pub struct ModelMetadata {
 
 impl From<&LlamaModel> for ModelMetadata {
     fn from(model: &LlamaModel) -> Self {
+        let model_name = get_metadata_raw(model, "general.base_model.0.name");
         let vocabulary_size = model.n_vocab();
         let n_embd = model.n_embd() as usize;
 
@@ -155,6 +158,7 @@ impl From<&LlamaModel> for ModelMetadata {
             .unwrap_or(0);
 
         let out = ModelMetadata {
+            model_name,
             vocabulary_size: vocabulary_size as usize,
             bos_token: model.token_bos(),
             eos_token: model.token_eos(),

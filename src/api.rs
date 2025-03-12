@@ -20,7 +20,7 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::ptr::null;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 struct ChatTemplates {
     inner: *mut HibikiCommonChatTemplates
@@ -339,7 +339,18 @@ async fn v1_chat_completions(
                 .into_response()
         } else {
             let mut out_tokens = Vec::new();
+            let mut last = Instant::now();
+            let mut avg_time = None;
             while let Ok(token) = rx.recv_async().await {
+                let now = Instant::now();
+
+                if let Some(avg) = avg_time {
+                    avg_time = Some((avg + (now - last)) / 2);
+                } else {
+                    avg_time = Some(now - last);
+                }
+
+                last = now;
                 out_tokens.push(token);
 
                 if log::max_level() >= log::Level::Debug {
@@ -349,6 +360,10 @@ async fn v1_chat_completions(
                     lock.write_all(s.as_bytes())?;
                     lock.flush()?;
                 }
+            }
+
+            if let Some(avg) = avg_time {
+                info!("avg time to decode one token use: {:?}", avg);
             }
 
             let completion_tokens = out_tokens.len() as u32;

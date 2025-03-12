@@ -94,7 +94,7 @@ struct Args {
     rpc_servers: Option<String>,
 
     #[arg(long)]
-    model_name: String,
+    model_name: Option<String>,
 
     #[arg(short, long, default_value_t = 4)]
     parallel_tasks: u32,
@@ -230,6 +230,13 @@ fn exec(args: Args) -> Result<()> {
     let model = LlamaModel::load_from_file(&backend, &args.model_path, &model_params)?;
     let model = Arc::new(model);
 
+    let model_name = match args.model_name {
+        None => {
+            metadata::get_metadata_raw(&model, "general.base_model.0.name")
+        }
+        Some(v) => v
+    };
+
     let draft_model = if let Some(draft_model_path) = args.draft_model_path {
         let mut draft_model_params = LlamaModelParams::default()
             .with_n_gpu_layers(u32::MAX);
@@ -274,7 +281,7 @@ fn exec(args: Args) -> Result<()> {
             let api_handle = api::run_embedding(
                 args.bind_addr,
                 model,
-                args.model_name,
+                model_name,
                 args.kv_cache_size_pre_task,
                 tx,
             );
@@ -303,7 +310,7 @@ fn exec(args: Args) -> Result<()> {
             let api_handle = api::run_completions(
                 args.bind_addr,
                 model,
-                args.model_name,
+                model_name,
                 args.kv_cache_size_pre_task,
                 tx,
                 args.template
