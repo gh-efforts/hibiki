@@ -58,7 +58,7 @@ impl RadixTrieKVCache {
     pub fn insert(&mut self, tokens: Vec<llama_token>, seq_data: Vec<u8>) -> Result<i32> {
         let mut seq_id = None;
 
-        for (id, x) in &mut self.seq_ids.iter_mut().enumerate() {
+        for (id, x) in &mut self.seq_ids.iter().enumerate() {
             if x.is_none() {
                 seq_id = Some(id as i32);
                 break;
@@ -67,15 +67,16 @@ impl RadixTrieKVCache {
 
         let seq_id = match seq_id {
             None => {
-                let item = self
+                let (seq_id, item) = self
                     .seq_ids
-                    .iter_mut()
-                    .min_by_key(|v| v.as_ref().unwrap().1.load(Ordering::Relaxed))
+                    .iter()
+                    .enumerate()
+                    .min_by_key(|(_, v)| v.as_ref().unwrap().1.load(Ordering::Relaxed))
                     .unwrap();
 
-                let (seq, _, _) = item.take().unwrap();
-                let seq_id = self.trie.remove(&seq).unwrap();
-                seq_id
+                let (seq, _, _) = item.as_ref().unwrap();
+                self.trie.remove(&seq);
+                seq_id as i32
             }
             Some(v) => v,
         };
