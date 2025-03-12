@@ -75,7 +75,7 @@ impl RadixTrieKVCache {
                     .unwrap();
 
                 let (seq, _, _) = item.as_ref().unwrap();
-                self.trie.remove(&seq);
+                self.trie.remove(seq);
                 seq_id as i32
             }
             Some(v) => v,
